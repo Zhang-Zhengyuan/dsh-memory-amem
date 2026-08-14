@@ -1,0 +1,26 @@
+# Patch overlay for the native dsh-memory-amem plugin.
+#
+# Usage:
+#   1. cd dsh-memory-amem && pnpm install && pnpm run build
+#   2. pnpm link --global
+#   3. (in the DSH monorepo root) pnpm link --global @yourname/dsh-memory-amem
+#   4. dsh web --patch "$PWD/dsh-memory-amem/cordis.patch.yml"
+#
+# For the MCP-server variant instead, use `cordis-mcp.cordis.yml`.
+
+- insert:
+    - id: dsh-memory-amem
+      name: '@yourname/dsh-memory-amem'
+      config:
+        storageDir: !!js >-
+          process.getBuiltinModule('node:path').join(
+            process.getBuiltinModule('node:os').homedir(),
+            '.dsh', 'memory-amem'
+          )
+        retrievalK: 10
+        hybridAlpha: 0.5
+        enableEvolution: true
+        enableAutoConsolidation: true
+        maxLinksPerNote: 5
+        embeddingModel: tfidf-lite
+        llmModel: auto

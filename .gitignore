@@ -1,0 +1,28 @@
+# Dependencies and build artifacts
+node_modules/
+dist/
+.pnpm-store/
+.pnpm-workspace-state-v1.json
+.modules.yaml
+
+# Local state and runtime
+.dsh/
+.DS_Store
+*.log
+*.tmp
+*.swp
+
+# Evaluation outputs (regenerable)
+results*.json
+
+# Python (for evaluation scripts)
+__pycache__/
+*.pyc
+.venv/
+
+# Editor / OS
+.idea/
+.vscode/
+
+# Built artifacts for the optional MCP server wrapper
+mcp/build/

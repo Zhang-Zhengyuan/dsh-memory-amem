@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>dsh-memory-amem · Memory Panel</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="bar">
+    <div class="bar-title">
+      <span class="logo">A-MEM</span>
+      <span class="subtitle">Long-term memory for DeepSeek Harness</span>
+    </div>
+    <div class="bar-meta">
+      <span id="status-dot" class="dot dot-off" title="Storage status"></span>
+      <span id="storage-path" class="storage-path">~/.dsh/memory-amem</span>
+    </div>
+  </header>
+
+  <main>
+    <aside class="sidebar">
+      <section class="stats-card" id="stats">
+        <h2>Stats</h2>
+        <div class="stats-grid">
+          <div><span class="num" id="stat-total">–</span><span class="label">notes</span></div>
+          <div><span class="num" id="stat-linked">–</span><span class="label">linked</span></div>
+          <div><span class="num" id="stat-avg">–</span><span class="label">avg links</span></div>
+        </div>
+        <div class="stats-range">
+          <small>oldest: <span id="stat-oldest">–</span></small>
+          <small>newest: <span id="stat-newest">–</span></small>
+        </div>
+      </section>
+
+      <section class="filters">
+        <h2>Browse</h2>
+        <button class="btn primary" id="btn-recent">Recent (20)</button>
+        <button class="btn" id="btn-refresh">Refresh</button>
+        <hr />
+        <input id="search-input" placeholder="Search memory…" />
+        <button class="btn" id="btn-search">Search</button>
+        <hr />
+        <details>
+          <summary>Add manually</summary>
+          <textarea id="add-content" placeholder="Memory content…"></textarea>
+          <button class="btn" id="btn-add">Remember</button>
+        </details>
+      </section>
+    </aside>
+
+    <section class="content">
+      <div class="results-header">
+        <h2 id="results-title">Recent memories</h2>
+        <span id="results-count" class="results-count"></span>
+      </div>
+      <div id="results" class="results"></div>
+    </section>
+  </main>
+
+  <div id="empty" class="empty hidden">
+    <h1>No memories yet</h1>
+    <p>Start a conversation in DSH — every user message is captured as a memory note.</p>
+    <p class="muted">Storage: <code id="empty-storage">~/.dsh/memory-amem</code></p>
+  </div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

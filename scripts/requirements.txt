@@ -1,0 +1,6 @@
+# Evaluation harness dependencies
+httpx>=0.25
+rank_bm25
+sentence-transformers  # for a real semantic baseline if you want
+scikit-learn
+openai

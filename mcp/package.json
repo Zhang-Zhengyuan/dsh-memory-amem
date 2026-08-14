@@ -1,0 +1,6 @@
+{
+  "name": "@modelcontextprotocol/sdk",
+  "version": "1.0.0",
+  "description": "MCP SDK stub — install via npm in production",
+  "type": "module"
+}

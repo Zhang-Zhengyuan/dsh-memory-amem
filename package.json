@@ -1,0 +1,84 @@
+{
+  "name": "@yourname/dsh-memory-amem",
+  "version": "0.1.0",
+  "description": "A-MEM style agentic memory for DeepSeek Harness (DSH). NeurIPS 2025.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./memory": {
+      "types": "./dist/memory.d.ts",
+      "import": "./dist/memory.js"
+    },
+    "./types": {
+      "types": "./dist/types.d.ts",
+      "import": "./dist/types.js"
+    },
+    "./retriever": {
+      "types": "./dist/retriever.d.ts",
+      "import": "./dist/retriever.js"
+    },
+    "./analysis": {
+      "types": "./dist/analysis.d.ts",
+      "import": "./dist/analysis.js"
+    },
+    "./evolution": {
+      "types": "./dist/evolution.d.ts",
+      "import": "./dist/evolution.js"
+    },
+    "./web": "./web/"
+  },
+  "scripts": {
+    "build": "tsc",
+    "build:mcp": "node -e \"console.log('cd mcp && npm install && npm run build')\"",
+    "dev": "tsc --watch",
+    "lint": "tsc --noEmit",
+    "test": "node --import tsx --test test/*.test.ts",
+    "evaluate": "python3 scripts/evaluate.py",
+    "dump": "node scripts/dump_memory.mjs"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "memory",
+    "agentic-memory",
+    "amem",
+    "zettelkasten",
+    "long-term-memory",
+    "cordis",
+    "mcp"
+  ],
+  "author": "yourname",
+  "license": "MIT",
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-tools": { "optional": true },
+    "@deepseek-ai/dsh-system-prompt": { "optional": true }
+  },
+  "dependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "uuid": "^11.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "tsx": "^4.0.0",
+    "@types/node": "^20.0.0",
+    "@types/uuid": "^10.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml",
+      "patchMcp": "./cordis-mcp.cordis.yml"
+    },
+    "minHarnessVersion": "0.1.0"
+  }
+}
