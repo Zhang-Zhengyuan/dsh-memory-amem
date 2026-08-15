@@ -20,27 +20,28 @@ export interface RetrieverOptions {
   modelName?: string;
 }
 
+export interface ScoredIndex {
+  index: number;
+  score: number;
+}
+
 export class HybridRetriever {
   private alpha: number;
-  private corpus: string[] = [];
   private notes: MemoryNote[] = [];
   private bm25: TfIdfIndex;
-  private docs: string[] = [];
 
   constructor(opts: RetrieverOptions) {
-    this.alpha = opts.alpha;
+    this.alpha = Math.max(0, Math.min(1, opts.alpha));
     this.bm25 = new TfIdfIndex();
   }
 
   addDocuments(documents: string[]): void {
     for (const doc of documents) {
-      this.corpus.push(doc);
       this.bm25.addDocument(doc);
     }
   }
 
   addDocument(document: string): void {
-    this.corpus.push(document);
     this.bm25.addDocument(document);
   }
 
@@ -56,15 +57,32 @@ export class HybridRetriever {
     return this.notes.length;
   }
 
+  rebuild(notes: MemoryNote[]): void {
+    this.notes = [];
+    this.bm25 = new TfIdfIndex();
+    for (const note of notes) {
+      this.registerNote(note);
+      this.addDocument(this.documentText(note));
+    }
+  }
+
   retrieve(query: string, k: number): number[] {
-    if (this.notes.length === 0) return [];
+    return this.retrieveScored(query, k).map((result) => result.index);
+  }
+
+  retrieveScored(query: string, k: number): ScoredIndex[] {
+    if (this.notes.length === 0 || !query.trim() || !Number.isFinite(k) || k <= 0) return [];
     const bm25Scores = this.bm25.score(query);
-    const bm25Norm = normalize(bm25Scores);
+    const bm25Norm = normalizePositive(bm25Scores);
     const semanticScores = this.semanticScore(query);
     // Element-wise weighted sum — same formula as the A-MEM paper.
-    const hybrid: number[] = bm25Norm.map((s, i) => this.alpha * s + (1 - this.alpha) * semanticScores[i]);
-    const topK = Math.min(k, hybrid.length);
-    return topKIndices(hybrid, topK);
+    const hybrid: number[] = bm25Norm.map((score, i) =>
+      (1 - this.alpha) * score + this.alpha * semanticScores[i],
+    );
+    const topK = Math.min(Math.floor(k), hybrid.length);
+    return topKIndices(hybrid, topK)
+      .map((index) => ({ index, score: hybrid[index] }))
+      .filter((result) => result.score > 1e-9);
   }
 
   private semanticScore(query: string): number[] {
@@ -90,11 +108,21 @@ export class HybridRetriever {
 }
 
 function tokenize(text: string): string[] {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .split(/\s+/)
-    .filter((t) => t.length > 1);
+  const chunks = text.normalize('NFKC').toLowerCase().match(/\p{Script=Han}+|[\p{L}\p{N}]+/gu) ?? [];
+  const tokens: string[] = [];
+  for (const chunk of chunks) {
+    if (/^\p{Script=Han}+$/u.test(chunk)) {
+      const chars = Array.from(chunk);
+      if (chars.length === 1) tokens.push(chars[0]);
+      else {
+        tokens.push(chunk);
+        for (let i = 0; i < chars.length - 1; i++) tokens.push(chars[i] + chars[i + 1]);
+      }
+    } else if (chunk.length > 1) {
+      tokens.push(chunk);
+    }
+  }
+  return tokens;
 }
 
 function termFrequency(tokens: string[]): Map<string, number> {
@@ -117,17 +145,16 @@ function l2(a: number[]): number {
   return Math.sqrt(dot(a, a));
 }
 
-function normalize(scores: number[]): number[] {
+function normalizePositive(scores: number[]): number[] {
   if (scores.length === 0) return [];
-  const min = Math.min(...scores);
   const max = Math.max(...scores);
-  const range = max - min + 1e-6;
-  return scores.map((s) => (s - min) / range);
+  if (max <= 0) return scores.map(() => 0);
+  return scores.map((score) => Math.max(0, score) / max);
 }
 
 function topKIndices(scores: number[], k: number): number[] {
   const indices = scores.map((score, idx) => ({ score, idx }));
-  indices.sort((a, b) => b.score - a.score);
+  indices.sort((a, b) => b.score - a.score || a.idx - b.idx);
   return indices.slice(0, k).map((x) => x.idx);
 }
 

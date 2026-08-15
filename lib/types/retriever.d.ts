@@ -17,19 +17,23 @@ export interface RetrieverOptions {
     alpha: number;
     modelName?: string;
 }
+export interface ScoredIndex {
+    index: number;
+    score: number;
+}
 export declare class HybridRetriever {
     private alpha;
-    private corpus;
     private notes;
     private bm25;
-    private docs;
     constructor(opts: RetrieverOptions);
     addDocuments(documents: string[]): void;
     addDocument(document: string): void;
     registerNote(note: MemoryNote): void;
     noteAt(index: number): MemoryNote | undefined;
     size(): number;
+    rebuild(notes: MemoryNote[]): void;
     retrieve(query: string, k: number): number[];
+    retrieveScored(query: string, k: number): ScoredIndex[];
     private semanticScore;
     private documentText;
 }

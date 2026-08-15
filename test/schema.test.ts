@@ -46,6 +46,7 @@ import {
   valueSchemaSpecToJsonSchema,
   parameterSchemaSpecToJsonSchema,
 } from '@deepseek-ai/dsh-tools';
+import type { ParameterSchemaSpec, ValueSchemaSpec } from '@deepseek-ai/dsh-tools';
 
 const SRC_PATH = join(import.meta.dirname, '..', 'src', 'index.ts');
 
@@ -58,10 +59,10 @@ const SRC_PATH = join(import.meta.dirname, '..', 'src', 'index.ts');
  * is Cordis-only; the source text is the simplest authoritative surface
  * for shape assertions.
  */
-function extractSchemasFromSource(): Record<string, unknown> {
+function extractSchemasFromSource(): Record<string, ValueSchemaSpec> {
   const src = readFileSync(SRC_PATH, 'utf8');
   const names = ['searchOutputSchema', 'simpleNoteOutputSchema', 'statsOutputSchema', 'recentOutputSchema'];
-  const out: Record<string, unknown> = {};
+  const out: Record<string, ValueSchemaSpec> = {};
   for (const name of names) {
     const header = src.indexOf(`function ${name}()`);
     assert.ok(header >= 0, `src/index.ts must export ${name}()`);
@@ -81,7 +82,7 @@ function extractSchemasFromSource(): Record<string, unknown> {
     assert.ok(bodyEnd > 0, `${name} must have a balanced object body`);
     const body = src.slice(bodyStart + 'return '.length, bodyEnd + 1);
     // eslint-disable-next-line no-new-func
-    out[name] = new Function(`return (${body});`)();
+    out[name] = new Function(`return (${body});`)() as ValueSchemaSpec;
   }
   return out;
 }
@@ -129,7 +130,7 @@ test('output schemas must NOT carry a top-level required in the source (paramete
   // rejected by `valueSchemaSpecToJsonSchema`.
   for (const [name, body] of Object.entries(schemas)) {
     assert.ok(
-      !Object.hasOwn(body, 'required'),
+      !Object.hasOwn(body as object, 'required'),
       `${name} must not declare top-level "required" in the source — the value-schema compiler lifts it from per-property required: true`,
     );
   }
@@ -142,7 +143,7 @@ test('parameters for memory_add / memory_search / memory_recent / memory_stats p
   // are: memory_search (query:string required, k:integer optional),
   // memory_add (content:string required), memory_recent
   // (limit:integer optional), memory_stats (no params).
-  const cases = [
+  const cases: Array<{ name: string; params: ParameterSchemaSpec; expectedRequired: string[] | undefined }> = [
     { name: 'memory_search', params: { query: { type: 'string', required: true }, k: { type: 'integer' } }, expectedRequired: ['query'] },
     { name: 'memory_add', params: { content: { type: 'string', required: true } }, expectedRequired: ['content'] },
     { name: 'memory_recent', params: { limit: { type: 'integer' } }, expectedRequired: undefined },

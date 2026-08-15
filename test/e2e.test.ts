@@ -8,7 +8,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { AgenticMemoryEngine } from '../src/memory.js';
-import type { PluginConfig } from '../src/types.js';
+import { resolveConfig } from '../src/config.js';
 import path from 'node:path';
 import os from 'node:os';
 import { promises as fs } from 'node:fs';
@@ -17,25 +17,21 @@ import { promises as fs } from 'node:fs';
 // Sequence:
 //   1. analyze_content for note A
 //   2. analyze_content for note B
-//   3. analyze_content for note C
-//   4. decide_evolution for note B  (looking at A as neighbor)
-//   5. strengthen_details for note B
-//   6. decide_evolution for note C  (looking at A, B as neighbors)
-//   7. strengthen_details for note C
+//   3. decide_evolution for note B  (looking at A as neighbor)
+//   4. strengthen_details for note B
+//   5. analyze_content for note C (no relevant neighbors, so evolution skips)
 function makeStubLLM() {
   const responses = [
     // 1. analyze A
     'KEYWORDS: cooking, pasta, italian\nCONTEXT: User mentioned cooking italian pasta.\nTAGS: cooking, italian, food',
     // 2. analyze B
     'KEYWORDS: cooking, pasta, recipe\nCONTEXT: User asked for a pasta recipe.\nTAGS: cooking, food, recipe',
-    // 3. analyze C
-    'KEYWORDS: machine-learning, agent, memory\nCONTEXT: User mentioned working on agent memory.\nTAGS: ml, agents, research',
-    // 4. decide B
+    // 3. decide B
     'DECISION: STRENGTHEN\nREASON: B is closely related to A',
-    // 5. strengthen B
+    // 4. strengthen B
     'CONNECTIONS: 0\nTAGS: cooking, recipe, italian',
-    // 6. decide C
-    'DECISION: NO_EVOLUTION\nREASON: C is unrelated to A, B',
+    // 5. analyze C
+    'KEYWORDS: machine-learning, agent, memory\nCONTEXT: User mentioned working on agent memory.\nTAGS: ml, agents, research',
   ];
   let i = 0;
   return async () => {
@@ -59,18 +55,18 @@ async function cleanup(dir: string) {
 
 test('end-to-end: three notes, evolution links B to A', async () => {
   const dir = tmpDir();
-  const config: PluginConfig = {
+  const config = resolveConfig({
     storageDir: dir,
     retrievalK: 5,
     hybridAlpha: 0.5,
     enableEvolution: true,
     enableAutoConsolidation: true,
     maxLinksPerNote: 5,
-    embeddingModel: 'all-MiniLM-L6-v2',
+    embeddingModel: 'tfidf-lite',
     llmModel: 'stub',
-  };
+  });
   const engine = new AgenticMemoryEngine({
-    llm: { generate: makeStubLLM() },
+    llm: { generate: makeStubLLM(), available: true },
     config,
   });
 

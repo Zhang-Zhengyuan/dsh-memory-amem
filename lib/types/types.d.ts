@@ -52,7 +52,13 @@ export interface PluginConfig {
     hybridAlpha: number;
     enableEvolution: boolean;
     enableAutoConsolidation: boolean;
+    enableAutoCapture: boolean;
+    enablePromptInjection: boolean;
+    memoryScope: 'global' | 'session';
     maxLinksPerNote: number;
+    maxMemoryChars: number;
+    promptMaxChars: number;
+    flushIntervalMs: number;
     embeddingModel: string;
     llmModel: string;
 }

@@ -34,3 +34,10 @@ test('recovers from empty keywords via heuristic', async () => {
   assert.ok(result.keywords.length > 0, 'heuristic keywords should kick in');
   assert.equal(result.context, 'only context');
 });
+
+test('fallback analysis retains useful Chinese keywords', async () => {
+  const svc = new AnalysisService(stubLLM(''));
+  const result = await svc.analyze('用户偏好使用 SQLite 数据库，并希望保留长期记忆。');
+  assert.ok(result.keywords.some((keyword) => keyword.includes('数据库') || keyword.includes('长期记忆')));
+  assert.ok(result.context.includes('SQLite'));
+});

@@ -153,7 +153,7 @@ ones — see troubleshooting below for the exact rule).
 
 | Tool | Required params | Optional params | Output |
 |---|---|---|---|
-| `memory_search` | `query: string` | `k: int` (default `retrievalK=10`) | `{ query, count, notes: [{ id, context, keywords, tags, content, createdAt, links }] }` |
+| `memory_search` | `query: string` | `k: int` (default `retrievalK=10`) | `{ query, count, notes: [{ id, context, keywords, tags, content, createdAt, links, score }] }` |
 | `memory_add` | `content: string` | — | `{ id, context, keywords, tags }` |
 | `memory_recent` | — | `limit: int` (default `20`) | `{ count, notes: [{ id, context, keywords, tags, content, createdAt, links }] }` |
 | `memory_stats` | — | — | `{ total, withLinks, avgLinks, oldest, newest }` |
@@ -175,6 +175,25 @@ store is empty.
 ---
 
 ## Installation into a DSH checkout
+
+Use a `file:` dependency for local development. Unlike `link:`, it installs
+the plugin's runtime dependencies and avoids unresolved packages such as
+`uuid`.
+
+```powershell
+Set-Location D:\path\to\dsh-memory-amem
+corepack pnpm install
+corepack pnpm build
+
+Set-Location D:\path\to\deepseek-harness
+corepack pnpm dsh plugin --profile web add "file:D:\path\to\dsh-memory-amem"
+corepack pnpm dsh --profile web
+```
+
+The package already declares `dsh.bundle.patch`. Do not also pass its
+`cordis.patch.yml` with `--patch`, because that inserts the same plugin id
+twice. If `pnpm` is not on `PATH`, use `corepack pnpm` or the absolute
+`pnpm.cmd` bundled with your DSH environment.
 
 This plugin installs as a **bundle layer** in the DSH loader. The loader
 applies patches in this order — `dsh-base`, `dsh-web-app` (web profile),
@@ -199,16 +218,12 @@ cd dsh-memory-amem
 pnpm install
 pnpm run build
 
-# 3a. link this package into the global DSH profiles node_modules
-#     so the loader can resolve @zhang-zhengyuan/dsh-tool-memory-amem
-node scripts/link-profile.mjs
-
-# 3b. register it as a bundle layer in the web profile
+# 3. register it as a bundle layer in the web profile
 cd /path/to/deepseek-harness
-pnpm dsh plugin --profile web add link:/absolute/path/to/dsh-memory-amem
+pnpm dsh plugin --profile web add file:/absolute/path/to/dsh-memory-amem
 
 # 4. boot
-pnpm dsh web
+pnpm dsh --profile web
 ```
 
 The bundled installer does all of steps 2–3b in one shot:
@@ -218,14 +233,8 @@ The bundled installer does all of steps 2–3b in one shot:
 bash scripts/install_into_dsh.sh /path/to/deepseek-harness
 ```
 
-**Why split link-then-register (step 3a + 3b)?** The DSH loader resolves
-plugin rows by Node package resolution from the profile directory, which
-climbs `~/.dsh/profiles/web/node_modules` → `~/.dsh/profiles/node_modules`.
-`dsh plugin add link:<pkg>` puts the package into the profile's own
-node_modules, but linking into the global `~/.dsh/profiles/node_modules/@zhang-zhengyuan/`
-makes the package visible to every profile (and survives `pnpm dsh plugin
-remove`/`update` cycles). This is the same recipe used by
-`zhu1090093659/dsh-web-ui`'s `scripts/link-profile.mjs`.
+The profile-local `file:` install is self-contained. Re-run the add command
+after rebuilding to refresh the profile copy.
 
 **Verify**:
 
@@ -301,12 +310,11 @@ allowBuilds:
   - cpu-features
 ```
 
-Then rerun `pnpm dsh plugin --profile web add link:<repo>`.
+Then rerun `pnpm dsh plugin --profile web add file:<repo>`.
 
 **`Module not found '@zhang-zhengyuan/dsh-tool-memory-amem'` at boot**: the
 package name isn't on the loader's resolution path. Run
-`node scripts/link-profile.mjs` (or `pnpm dsh plugin --profile web add link:<repo>`)
-to wire it in.
+`pnpm dsh plugin --profile web add file:<repo>` to wire it in.
 
 **Hooked but no tool appears in the UI**: restart `pnpm dsh web` after
 install; the loader only reads the bundle layer list at boot.
@@ -427,20 +435,11 @@ modes (per-property `required: false`, top-level `required` on
 `output.schema`, empty schema) fails the test before the harness can
 boot.
 
-**`ctx.llm is not available on this DSH install`** (raised by every
-`memory_add` call): the current DSH profile doesn't include an LLM
-plugin (e.g. `@deepseek-ai/llm-deepseek` or one of the
-community providers). The plugin previously hard-threw here, which
-made `memory_add` unusable on bare text-only DSH installs. Since
-v0.2.0 the `makeLlmAdapter` shim emits a one-line warning at boot
-and falls back to a stub `generate` response. The
-`analysis.ts` / `evolution.ts` parsers still parse the stub,
-falling through to their `heuristicKeywords()` / `heuristicContext()`
-helpers — so `memory_add` continues to persist notes (with
-heuristic keywords / tags instead of LLM-enriched ones), and
-`memory_search` / `memory_stats` / `memory_recent` work as usual.
-The DSH log will repeat the warning on every boot; install an LLM
-plugin to make it go away.
+**No auxiliary LLM is available**: the plugin uses DSH's public
+`ctx.llm.stream()` API. `llmModel: auto` selects the first registered
+provider/model; `provider:model` selects an explicit route. If no provider
+exists or a call fails, the plugin logs once, uses deterministic multilingual
+analysis, and skips evolution. Note creation and retrieval continue working.
 
 ### Option 4: standalone HTTP inspector (for the web panel)
 
@@ -456,8 +455,8 @@ configured — useful for static inspection of exported memories.
 
 ## Configuration
 
-All options come from the `config:` block in the cordis patch — the
-`cordis.patch.yml` here ships the defaults, override per-host via
+All options come from the `config:` block in a later cordis patch; the plugin
+resolves and validates the defaults itself. Override per-host via
 `~/.dsh/cordis.patch.yml` (see [DSH patch format](https://github.com/zhu1090093659/dsh-web-ui/blob/main/docs/plugins.md)):
 
 | Option | Default | Description |
@@ -465,11 +464,17 @@ All options come from the `config:` block in the cordis patch — the
 | `storageDir` | `~/.dsh/memory-amem` | Where notes live (one JSON per note + `index.json`). |
 | `retrievalK` | `10` | Top-k neighbors for system-prompt injection and search. |
 | `hybridAlpha` | `0.5` | BM25 ↔ semantic blend weight (0 = pure BM25, 1 = pure semantic). |
-| `enableEvolution` | `true` | Run the LLM-driven evolution step on every note. |
-| `enableAutoConsolidation` | `true` | Periodically rewrite older notes in light of new evidence. |
+| `enableEvolution` | `true` | Run LLM evolution only when relevant neighbors exist. |
+| `enableAutoConsolidation` | `true` | Consolidate exact duplicates instead of storing another note. |
+| `enableAutoCapture` | `true` | Capture only real DSH messages with source `kind: user`. |
+| `enablePromptInjection` | `true` | Inject bounded notes marked explicitly as untrusted historical data. |
+| `memoryScope` | `global` | `global` cross-session recall, or `session` isolation. |
 | `maxLinksPerNote` | `5` | Cap outbound links. |
+| `maxMemoryChars` | `12000` | Maximum accepted note/message length. |
+| `promptMaxChars` | `4000` | Hard bound for the complete memory prompt section. |
+| `flushIntervalMs` | `5000` | Serialized background flush interval in milliseconds. |
 | `embeddingModel` | `tfidf-lite` | Retriever backend (only `tfidf-lite` ships in v0.2.0). |
-| `llmModel` | `auto` | LLM to use (`auto` defers to DSH's selected provider). |
+| `llmModel` | `auto` | First discovered model, a model id, or `provider:model`. |
 
 ---
 
@@ -535,7 +540,7 @@ pnpm run evaluate     # LoCoMo eval (needs DEEPSEEK_API_KEY)
 
 The engine is backend-agnostic: any callable that takes a `prompt` and
 returns a `string` works as the LLM. The Python eval harness uses
-`openai`-compatible DeepSeek; the native plugin uses `ctx.llm.text`;
+`openai`-compatible DeepSeek; the native plugin uses `ctx.llm.stream`;
 the MCP server uses `fetch` against `/chat/completions`.
 
 ---

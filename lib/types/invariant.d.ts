@@ -7,7 +7,7 @@
  */
 export { name, version } from './index.ts';
 /** Plugin config keys accepted by the loader. Stable contract surface. */
-export declare const CONFIG_KEYS: readonly ["storageDir", "retrievalK", "hybridAlpha", "enableEvolution", "enableAutoConsolidation", "maxLinksPerNote", "embeddingModel", "llmModel"];
+export declare const CONFIG_KEYS: readonly ["storageDir", "retrievalK", "hybridAlpha", "enableEvolution", "enableAutoConsolidation", "enableAutoCapture", "enablePromptInjection", "memoryScope", "maxLinksPerNote", "maxMemoryChars", "promptMaxChars", "flushIntervalMs", "embeddingModel", "llmModel"];
 export type ConfigKey = (typeof CONFIG_KEYS)[number];
 /** Default values for every config key — single source of truth for `apply`. */
 export declare const CONFIG_DEFAULTS: {
@@ -16,7 +16,13 @@ export declare const CONFIG_DEFAULTS: {
     readonly hybridAlpha: 0.5;
     readonly enableEvolution: true;
     readonly enableAutoConsolidation: true;
+    readonly enableAutoCapture: true;
+    readonly enablePromptInjection: true;
+    readonly memoryScope: "global";
     readonly maxLinksPerNote: 5;
+    readonly maxMemoryChars: 12000;
+    readonly promptMaxChars: 4000;
+    readonly flushIntervalMs: 5000;
     readonly embeddingModel: "tfidf-lite";
     readonly llmModel: "auto";
 };

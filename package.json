@@ -1,7 +1,7 @@
 {
   "name": "@zhang-zhengyuan/dsh-tool-memory-amem",
   "version": "0.2.0",
-  "description": "A-MEM style agentic memory for the dsh web GUI: long-term memory that captures every user message, evolves links via an LLM-driven decision step, and re-injects relevant notes into every system prompt. Model-facing tools: memory_search / memory_add / memory_recent / memory_stats. Hot-pluggable — mounted via `~/.dsh/cordis.patch.yml` + a profile node_modules symlink, no dsh source changes.",
+  "description": "A-MEM style long-term memory for DeepSeek Harness with guarded auto-capture, hybrid retrieval, prompt recall, and four model-facing memory tools.",
   "type": "module",
   "packageManager": "pnpm@11.7.0",
   "engines": {
@@ -62,15 +62,22 @@
     "uuid": "^11.0.0"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1"
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-agent": "^0.1.0-rc.5",
+    "@deepseek-ai/dsh-llm": "^0.1.0-rc.5",
+    "@deepseek-ai/dsh-session": "^0.1.0-rc.5",
+    "@deepseek-ai/dsh-system-prompt": "^0.1.0-rc.5",
+    "@deepseek-ai/dsh-tools": "^0.1.0-rc.5"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/dsh-system-prompt": { "optional": true },
-    "@deepseek-ai/dsh-tools": { "optional": true },
     "@deepseek-ai/dsh-client-ui-slots": { "optional": true }
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-agent": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-llm": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-session": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-system-prompt": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-tools": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-client-ui-slots": "^0.1.0-rc.6",
@@ -86,6 +93,7 @@
     "lib/**/*.d.ts",
     "lib/**/*.d.ts.map",
     "src",
+    "mcp",
     "cordis.patch.yml",
     "README.md",
     "LICENSE"

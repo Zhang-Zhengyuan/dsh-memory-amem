@@ -10,32 +10,28 @@
  * "self-contained" stance.
  *
  * Run with:
- *   node build/index.js
+ *   node mcp/index.js
  *
  * The server requires the parent dsh-memory-amem package to be built
- * (so dist/index.js etc. exist). All A-MEM work happens in the engine.
+ * (so lib/memory.js exists). All A-MEM work happens in the engine.
  */
 
-import { AgenticMemoryEngine } from '../dist/memory.js';
+import { AgenticMemoryEngine } from '../lib/memory.js';
 import { createInterface } from 'node:readline';
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs/promises';
 
-const HOME = process.env.HOME || os.homedir();
-const STORAGE_DIR = process.env.DSH_MEMORY_AMEM_DIR
-  ? path.join(process.env.DSH_MEMORY_AMEM_DIR, '.dsh/memory-amem')
-  : path.join(HOME, '.dsh/memory-amem');
+const STORAGE_DIR = process.env.DSH_MEMORY_AMEM_DIR || path.join(os.homedir(), '.dsh/memory-amem');
 
 const DEEPSEEK_BASE_URL = process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com';
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || '';
 
 // LLM adapter: hits the DeepSeek Chat Completions endpoint over fetch.
 const llm = {
+  available: Boolean(DEEPSEEK_API_KEY),
   generate: async (prompt, opts = {}) => {
-    if (!DEEPSEEK_API_KEY) {
-      throw new Error('DEEPSEEK_API_KEY not set');
-    }
+    if (!DEEPSEEK_API_KEY) return '';
     const res = await fetch(`${DEEPSEEK_BASE_URL}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -74,7 +70,13 @@ const engine = new AgenticMemoryEngine({
     hybridAlpha: 0.5,
     enableEvolution: true,
     enableAutoConsolidation: true,
+    enableAutoCapture: false,
+    enablePromptInjection: false,
+    memoryScope: 'global',
     maxLinksPerNote: 5,
+    maxMemoryChars: 12_000,
+    promptMaxChars: 4_000,
+    flushIntervalMs: 5_000,
     embeddingModel: 'tfidf-lite',
     llmModel: 'auto',
   },
@@ -131,7 +133,8 @@ const TOOLS = [
 async function callTool(name, args) {
   switch (name) {
     case 'memory_search': {
-      const results = engine.search(args.query, args.k ?? 10);
+      if (typeof args.query !== 'string' || !args.query.trim()) throw new TypeError('query must be a non-empty string');
+      const results = engine.search(args.query, boundedCount(args.k, 10));
       return {
         query: args.query,
         count: results.length,
@@ -143,10 +146,12 @@ async function callTool(name, args) {
           content: r.note.content.slice(0, 500),
           createdAt: r.note.createdAt,
           links: r.note.links.length,
+          score: r.score,
         })),
       };
     }
     case 'memory_add': {
+      if (typeof args.content !== 'string' || !args.content.trim()) throw new TypeError('content must be a non-empty string');
       const note = await engine.add(args.content);
       return {
         id: note.id,
@@ -159,7 +164,7 @@ async function callTool(name, args) {
       return engine.stats();
     }
     case 'memory_recent': {
-      const notes = engine.all().slice(0, args.limit ?? 20);
+      const notes = engine.all().slice(0, boundedCount(args.limit, 20));
       return {
         count: notes.length,
         notes: notes.map((n) => ({
@@ -214,20 +219,16 @@ function replyError(id, code, message) {
 // ----- stdio transport -----
 
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
-let buffer = '';
 
 rl.on('line', (line) => {
-  buffer += line;
-  if (!buffer.endsWith('}')) return;
+  if (!line.trim()) return;
   let request;
   try {
-    request = JSON.parse(buffer);
+    request = JSON.parse(line);
   } catch (err) {
     replyError(null, -32700, `parse error: ${err.message}`);
-    buffer = '';
     return;
   }
-  buffer = '';
   const { id, method, params } = request;
   const handler = handlers[method];
   if (!handler) {
@@ -245,7 +246,18 @@ rl.on('line', (line) => {
     });
 });
 
-process.on('SIGINT', async () => {
+function boundedCount(value, fallback) {
+  return Number.isFinite(value) && value > 0 ? Math.min(Math.floor(value), 100) : fallback;
+}
+
+let shuttingDown = false;
+async function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
   await engine.dispose();
   process.exit(0);
-});
+}
+
+rl.once('close', shutdown);
+process.once('SIGINT', shutdown);
+process.once('SIGTERM', shutdown);

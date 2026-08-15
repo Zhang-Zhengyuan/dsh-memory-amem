@@ -16,20 +16,15 @@ the plugin source into the DSH monorepo.
 
 ## Installation
 
-```sh
-cd dsh-memory-amem/mcp
-npm install
-pnpm run build
-```
-
-This produces `build/index.js` — a runnable stdio MCP server.
+Build the parent package once with `pnpm build`. The MCP wrapper has no
+additional dependencies and runs directly from `mcp/index.js`.
 
 ## Running standalone
 
 ```sh
 # Provide a DeepSeek key for the A-MEM analysis LLM calls
 export DEEPSEEK_API_KEY=sk-...
-node build/index.js
+node mcp/index.js
 ```
 
 The server listens on stdio and exposes the same `memory_*` tools as the

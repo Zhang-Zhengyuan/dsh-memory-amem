@@ -124,7 +124,7 @@ system prompt，让模型能想起之前的对话。
 
 | 工具 | 必填参数 | 可选参数 | 输出 |
 |---|---|---|---|
-| `memory_search` | `query: string` | `k: int`（默认 `retrievalK=10`） | `{ query, count, notes: [{ id, context, keywords, tags, content, createdAt, links }] }` |
+| `memory_search` | `query: string` | `k: int`（默认 `retrievalK=10`） | `{ query, count, notes: [{ id, context, keywords, tags, content, createdAt, links, score }] }` |
 | `memory_add` | `content: string` | — | `{ id, context, keywords, tags }` |
 | `memory_recent` | — | `limit: int`（默认 `20`） | `{ count, notes: [{ id, context, keywords, tags, content, createdAt, links }] }` |
 | `memory_stats` | — | — | `{ total, withLinks, avgLinks, oldest, newest }` |
@@ -143,6 +143,24 @@ tool-guidance 频段），对当前用户消息检索 top-`retrievalK` 笔记并
 ---
 
 ## 安装到 DSH
+
+本地开发请使用 `file:` 安装；`link:` 只建软链接，可能让插件自己的
+`uuid` 等运行时依赖无法解析。Windows PowerShell 示例：
+
+```powershell
+Set-Location D:\path\to\dsh-memory-amem
+corepack pnpm install
+corepack pnpm build
+
+Set-Location D:\path\to\deepseek-harness
+corepack pnpm dsh plugin --profile web add "file:D:\path\to\dsh-memory-amem"
+corepack pnpm dsh --profile web
+```
+
+本包已经声明 `dsh.bundle.patch`，安装后不要再把同一份
+`cordis.patch.yml` 作为 `--patch` 传入，否则会重复插入
+`tool-memory-amem`。如果系统找不到 `pnpm`，请使用 `corepack pnpm`
+或 DSH 环境内置的 `pnpm.cmd` 绝对路径。
 
 本插件作为 DSH loader 的 **bundle 层** 安装。Loader 按以下顺序叠加
 patch —— `dsh-base`、`dsh-web-app`（web profile），profile 的
@@ -172,10 +190,10 @@ node scripts/link-profile.mjs
 
 # 3b. 在 web profile 里注册为 bundle 层
 cd /path/to/deepseek-harness
-pnpm dsh plugin --profile web add link:/absolute/path/to/dsh-memory-amem
+pnpm dsh plugin --profile web add file:/absolute/path/to/dsh-memory-amem
 
 # 4. 启动
-pnpm dsh web
+pnpm dsh --profile web
 ```
 
 聚合安装脚本一键完成步骤 2–3b：
@@ -268,11 +286,11 @@ allowBuilds:
   - cpu-features
 ```
 
-然后重新运行 `pnpm dsh plugin --profile web add link:<repo>`。
+然后重新运行 `pnpm dsh plugin --profile web add file:<repo>`。
 
 **`Module not found '@zhang-zhengyuan/dsh-tool-memory-amem'` 启动时
 报错**：包名不在 loader 的解析路径上。运行 `node scripts/link-profile.mjs`
-（或 `pnpm dsh plugin --profile web add link:<repo>`）即可挂上。
+（或直接运行 `pnpm dsh plugin --profile web add file:<repo>`）即可挂上。
 
 **Hooked 但 UI 上没有出现工具**：安装后重启 `pnpm dsh web`，loader
 只在启动时读取 bundle 层列表。
@@ -379,16 +397,11 @@ helper 给 TypeScript 推断出 literal-typed schema，让 `InferValue<O>`
 数组 —— 三种拒绝模式（per-property `required: false`、顶层 `required`
 在 `output.schema` 上、空 schema）都会在 harness 启动前被测试抓到。
 
-**`ctx.llm is not available on this DSH install`**（每次 `memory_add` 调
-用都会抛）：当前 DSH profile 没有装 LLM 插件（例如
-`@deepseek-ai/llm-deepseek` 或社区版 provider）。插件之前在此硬抛，
-这让 `memory_add` 在裸 text-only DSH 安装上完全不能用。v0.2.0 起
-`makeLlmAdapter` 在启动时打印一行警告，然后降级到一个 stub `generate`
-响应。`analysis.ts` / `evolution.ts` 的解析器仍然能解析 stub，回退到
-它们的 `heuristicKeywords()` / `heuristicContext()` 助手 —— `memory_add`
-继续能写入笔记（用启发式关键词 / 标签而非 LLM 提炼的），并且
-`memory_search` / `memory_stats` / `memory_recent` 一切照常。DSH 日志
-会在每次启动时重复这条警告；装一个 LLM 插件就消失。
+**没有可用的辅助 LLM**：插件现在使用 DSH 公共的
+`ctx.llm.stream()` 接口。`llmModel: auto` 选择首个已注册
+provider/model，也可用 `provider:model` 指定路由。如果没有 provider
+或调用失败，插件只记录一次警告，改用确定性的多语言分析，并跳过
+演化；记忆写入与检索仍然可用。
 
 ---
 
@@ -405,8 +418,8 @@ panel 在没配 WebSocket 时回退到读 `dump.json` —— 适合离线查看�
 
 ## 配置
 
-所有选项都来自 cordis patch 的 `config:` 块 —— 本仓库的
-`cordis.patch.yml` 自带默认值，主机级覆盖写在 `~/.dsh/cordis.patch.yml`
+所有选项都来自后续 cordis patch 的 `config:` 块；默认值由插件内部解析并
+校验。主机级覆盖写在 `~/.dsh/cordis.patch.yml`
 （参考 [DSH patch 格式](https://github.com/zhu1090093659/dsh-web-ui/blob/main/docs/plugins.md)）：
 
 | 选项 | 默认值 | 说明 |
@@ -414,11 +427,17 @@ panel 在没配 WebSocket 时回退到读 `dump.json` —— 适合离线查看�
 | `storageDir` | `~/.dsh/memory-amem` | 笔记存储路径（每个 note 一个 JSON + `index.json`）。 |
 | `retrievalK` | `10` | 注入到 system prompt 与 `memory_search` 的 top-k 邻居数。 |
 | `hybridAlpha` | `0.5` | BM25 ↔ 语义混合权重（0 = 纯 BM25，1 = 纯语义）。 |
-| `enableEvolution` | `true` | 每个新 note 都跑 LLM 演化步骤。 |
-| `enableAutoConsolidation` | `true` | 周期性基于新证据改写较旧的笔记。 |
+| `enableEvolution` | `true` | 只在存在相关邻居时运行 LLM 演化。 |
+| `enableAutoConsolidation` | `true` | 精确重复内容合并到已有笔记。 |
+| `enableAutoCapture` | `true` | 只捕获 `source.kind: user` 的真实用户消息。 |
+| `enablePromptInjection` | `true` | 注入有总长度限制、明确标为不可信历史数据的笔记。 |
+| `memoryScope` | `global` | `global` 跨会话记忆；`session` 严格会话隔离。 |
 | `maxLinksPerNote` | `5` | 单节点出向链接上限。 |
+| `maxMemoryChars` | `12000` | 单条手工/自动捕获记忆的最大字符数。 |
+| `promptMaxChars` | `4000` | 完整 memory prompt 段的字符上限。 |
+| `flushIntervalMs` | `5000` | 串行后台刷盘间隔（毫秒）。 |
 | `embeddingModel` | `tfidf-lite` | 检索后端（v0.2.0 仅内置 `tfidf-lite`）。 |
-| `llmModel` | `auto` | 使用的 LLM（`auto` 跟随 DSH 选择的 provider）。 |
+| `llmModel` | `auto` | 首个发现模型、模型 id，或显式 `provider:model`。 |
 
 ---
 
@@ -483,7 +502,7 @@ pnpm run evaluate     # LoCoMo 评测（需要 DEEPSEEK_API_KEY）
 
 引擎与后端无关：任何接收 `prompt` 字符串并返回 `string` 的 callable 都
 可以作为 LLM。Python 评测脚本用 `openai` 兼容的 DeepSeek；原生插件用
-`ctx.llm.text`；MCP server 用 `fetch` 直接打 `/chat/completions`。
+`ctx.llm.stream`；MCP server 用 `fetch` 直接打 `/chat/completions`。
 
 ---
 
