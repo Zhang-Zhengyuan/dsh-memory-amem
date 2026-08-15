@@ -1,83 +1,58 @@
 /**
- * dsh-memory-amem — Cordis plugin entry for DeepSeek Harness.
+ * dsh-tool-memory-amem — host loader entry for DeepSeek Harness.
  *
- * Hooks the A-MEM engine into DeepSeek Harness's session lifecycle:
+ * Hooks the A-MEM engine into DSH's session lifecycle:
  *   - after every user message:       run analyze + evolution, persist note
- *   - before every assistant turn:    inject relevant notes as a system-prompt section
- *   - inside the web UI:              expose a memory_* tool family so the user
- *                                     and the model can inspect / search / manage
+ *   - before every assistant turn:    inject relevant notes as a system-prompt
+ *                                     section (order 200, tool-guidance band)
+ *   - in the model context:           expose four `memory_*` tools
+ *   - for other plugins:              expose `ctx.memoryAmem` service
  *
  * The plugin is intentionally side-effect minimal: when no memories exist
  * yet it injects nothing, and when the engine fails it logs and lets the
  * harness continue without memory.
  *
- * Installation pattern:
- *   1. pnpm link in this directory (registers @yourname/dsh-memory-amem)
- *   2. In the DSH monorepo:  pnpm link @yourname/dsh-memory-amem
- *   3. From the DSH root:    dsh web --patch <dsh-memory-amem>/cordis.patch.yml
+ * Install with:
+ *   dsh plugin --profile web add link:<repo>
+ * or after publishing to npm:
+ *   dsh plugin --profile web add @yourname/dsh-tool-memory-amem
  *
- *   -- OR --
- *
- *   1. npm link (or pnpm link) this directory in DSH's package.json
- *   2. Use cordis.yml patches to enable it.
+ * The plugin declares both halves in package.json (`dsh.client`); the
+ * browser half lives in src/client/index.ts and currently only reserves
+ * the UI slot for a future memory panel.
  */
 
-import { AgenticMemoryEngine } from './memory.js'
-import type { PluginConfig, MemoryNote } from './types.js'
+import type { Context } from '@deepseek-ai/cordis'
+import { defineTool } from '@deepseek-ai/dsh-tools'
+import { AgenticMemoryEngine } from './memory.ts'
+import type { PluginConfig, MemoryNote } from './types.ts'
+import { CONFIG_DEFAULTS, SERVICE_KEY } from './invariant.ts'
 
-export const name = 'dsh-memory-amem'
-export const version = '0.1.0'
+export const name = 'tool-memory-amem'
+export const version = '0.2.0'
 export const inject = ['tools', 'systemPrompt', 'sessions', 'llm']
 
-export interface AmemPluginConfig extends Partial<PluginConfig> {}
+export type AmemPluginConfig = Partial<PluginConfig>
 
 /**
- * Loose shape of the bits of the Cordis context this plugin uses. DSH
- * declares the concrete services (`systemPrompt`, `tools`, `sessions`,
- * `llm`) via `declare module '@deepseek-ai/cordis'` inside the DSH
- * monorepo; out-of-tree plugins don't see those augmentations, so we
- * mirror the minimal surface we need here. This keeps the plugin
- * compatible with both the vendored cordis and the public npm release.
- */
-export interface DshContext {
-  logger?: { info: (msg: string) => void; warn: (msg: string) => void; error: (msg: string) => void };
-  effect: (fn: () => (() => void) | void | Promise<void | (() => void)>) => void;
-  on: (event: string, handler: (...args: unknown[]) => unknown) => void;
-  provide: (key: string, value: unknown) => () => void;
-  systemPrompt?: { section: (spec: { name: string; order: number; text: string | ((ctx: unknown) => string) }) => () => void };
-  tools?: { register: (def: unknown) => () => void };
-  llm?: { text?: (opts: { prompt: string; temperature?: number; maxTokens?: number }) => Promise<string>; generate?: (opts: { prompt: string; temperature?: number; maxTokens?: number }) => Promise<string | { text?: string }> };
-}
-
-/**
- * Plugin entry. Receives the Cordis context and the resolved config
- * from the cordis.yml row that loaded this plugin.
+ * Apply the host half. Receives the Cordis context and the loader-resolved
+ * config (schema defaults already applied by the DSH loader).
  *
- * Mirrors the apply() shape used by every official DSH plugin
- * (see packages/todo/tool-todo, packages/web/tool-web, etc.).
+ * Mirrors the apply() shape of every official DSH plugin
+ * (see packages/todo/tool-todo, packages/web/tool-web).
  */
-export function apply(rawCtx: unknown, options: AmemPluginConfig = {}): void {
-  const ctx = rawCtx as DshContext;
-  const config: PluginConfig = {
-    storageDir: '~/.dsh/memory-amem',
-    retrievalK: 10,
-    hybridAlpha: 0.5,
-    enableEvolution: true,
-    enableAutoConsolidation: true,
-    maxLinksPerNote: 5,
-    embeddingModel: 'tfidf-lite',
-    llmModel: 'auto',
-    ...options,
-  }
+export function apply(rawCtx: Context, options: AmemPluginConfig = {}): void {
+  const ctx = rawCtx as DshContext
+  const config: PluginConfig = { ...CONFIG_DEFAULTS, ...options }
 
   const log = {
-    info: (msg: string) => ctx.logger?.info(`[dsh-memory-amem] ${msg}`),
-    warn: (msg: string) => ctx.logger?.warn(`[dsh-memory-amem] ${msg}`),
-    error: (msg: string) => ctx.logger?.error(`[dsh-memory-amem] ${msg}`),
+    info: (msg: string) => ctx.logger?.info(`[dsh-tool-memory-amem] ${msg}`),
+    warn: (msg: string) => ctx.logger?.warn(`[dsh-tool-memory-amem] ${msg}`),
+    error: (msg: string) => ctx.logger?.error(`[dsh-tool-memory-amem] ${msg}`),
   }
 
   // Adapters over DSH services so the engine stays backend-agnostic
-  // (and is reusable from the Python eval harness and unit tests).
+  // (re-usable from the Python eval harness and unit tests).
   const llm = makeLlmAdapter(ctx, log)
   const engine = new AgenticMemoryEngine({ llm, config, console: log })
 
@@ -89,36 +64,36 @@ export function apply(rawCtx: unknown, options: AmemPluginConfig = {}): void {
   })
 
   // 1. System-prompt section: dynamic per turn, queries the user's current message.
-  //    Order -1 (between harness identity at -100 and persona at 0).
+  //    Order 200 puts the section in the tool-guidance band (task-board's SECTION_ORDER).
   if (ctx.systemPrompt) {
     ctx.systemPrompt.section({
-      name: 'memory:long-term',
-      order: -1,
+      name: 'plugin:tool-memory-amem',
+      order: 200,
       text: (assembleCtx: unknown) => {
         try {
-          const query = lastUserMessage(assembleCtx) ?? '';
-          if (!query) return '';
-          const notes = engine.topKForPrompt(query, config.retrievalK);
-          if (notes.length === 0) return '';
-          return renderMemorySection(notes);
+          const query = lastUserMessage(assembleCtx) ?? ''
+          if (!query) return ''
+          const notes = engine.topKForPrompt(query, config.retrievalK)
+          if (notes.length === 0) return ''
+          return renderMemorySection(notes)
         } catch (err) {
-          log.warn(`system-prompt inject failed: ${(err as Error).message}`);
-          return '';
+          log.warn(`system-prompt inject failed: ${(err as Error).message}`)
+          return ''
         }
       },
-    });
+    })
   }
 
   // 2. Tools: the model (and user via UI) can search / inspect / manage memory.
   //    Tool definitions follow DSH's ToolDefinition shape — see packages/core/tools.
   //    We avoid the `@deepseek-ai/dsh-tools/defineTool` helper to stay
   //    zero-dep; the registered objects satisfy the same contract.
-  const tools = ctx.tools;
+  const tools = ctx.tools
   if (tools) {
-    tools.register(makeMemorySearchTool(engine, config));
-    tools.register(makeMemoryAddTool(engine));
-    tools.register(makeMemoryStatsTool(engine));
-    tools.register(makeMemoryRecentTool(engine));
+    tools.register(makeMemorySearchTool(engine, config))
+    tools.register(makeMemoryAddTool(engine))
+    tools.register(makeMemoryStatsTool(engine))
+    tools.register(makeMemoryRecentTool(engine))
   }
 
   // 3. Listen to user messages and persist them as notes.
@@ -135,8 +110,7 @@ export function apply(rawCtx: unknown, options: AmemPluginConfig = {}): void {
   })
 
   // 4. Expose the engine as a service so other plugins can consume it.
-  //    Other plugins can `ctx.inject(['memoryAmem'], c => c.memoryAmem.search(...))`.
-  ctx.provide('memoryAmem', {
+  ctx.provide(SERVICE_KEY, {
     add: (content: string) => engine.add(content),
     search: (query: string, k?: number) => engine.search(query, k),
     stats: () => engine.stats(),
@@ -145,28 +119,68 @@ export function apply(rawCtx: unknown, options: AmemPluginConfig = {}): void {
   })
 }
 
+// ----- type shims -----
+
+/**
+ * Minimal structural shape for the bits of the Cordis context this plugin
+ * uses. DSH augments `Context` with concrete services (`systemPrompt`,
+ * `tools`, `sessions`, `llm`) via `declare module '@deepseek-ai/cordis'`
+ * inside its monorepo; an out-of-tree consumer that pulls the public SDK
+ * sees only the base shape, so we mirror what we need here. This is the
+ * same trick used by every other out-of-tree dsh plugin (verified in
+ * @linxin666/dsh-tool-describe-image and @linxin666/dsh-ssh).
+ */
+interface DshContext {
+  logger?: { info: (msg: string) => void; warn: (msg: string) => void; error: (msg: string) => void };
+  effect: (fn: () => (() => void) | void | Promise<void | (() => void)>) => void;
+  on: (event: string, handler: (...args: unknown[]) => unknown) => void;
+  provide: (key: string, value: unknown) => () => void;
+  systemPrompt?: { section: (spec: { name: string; order: number; text: string | ((ctx: unknown) => string) }) => () => void };
+  tools?: { register: (def: unknown) => () => void };
+  llm?: {
+    text?: (opts: { prompt: string; temperature?: number; maxTokens?: number }) => Promise<string>;
+    generate?: (opts: { prompt: string; temperature?: number; maxTokens?: number }) => Promise<string | { text?: string }>;
+  };
+}
+
 // ----- helpers -----
 
 function makeLlmAdapter(
   ctx: DshContext,
   log: { error: (msg: string) => void; warn: (msg: string) => void; info: (msg: string) => void },
-): { generate: (prompt: string, opts?: { temperature?: number; json?: boolean }) => Promise<string> } {
-  return {
-    generate: async (prompt: string, opts: { temperature?: number; json?: boolean } = {}) => {
-      const llmCtx = ctx as unknown as {
-        llm?: {
-          text?: (opts: { prompt: string; temperature?: number; maxTokens?: number }) => Promise<string>;
-          generate?: (opts: { prompt: string; temperature?: number; maxTokens?: number }) => Promise<string | { text?: string }>;
-        };
-      };
-      if (llmCtx.llm?.text) {
-        return await llmCtx.llm.text({ prompt, temperature: opts.temperature ?? 0.3, maxTokens: 1000 });
-      }
-      if (llmCtx.llm?.generate) {
-        const out = await llmCtx.llm.generate({ prompt, temperature: opts.temperature ?? 0.3, maxTokens: 1000 });
+): { generate: (prompt: string, opts?: { temperature?: number; json?: boolean }) => Promise<string>; available: boolean } {
+  const llm = ctx.llm;
+  const textFn = llm?.text;
+  const generateFn = llm?.generate;
+  if (textFn) {
+    return {
+      available: true,
+      generate: async (prompt: string, opts: { temperature?: number; json?: boolean } = {}) =>
+        await textFn({ prompt, temperature: opts.temperature ?? 0.3, maxTokens: 1000 }),
+    };
+  }
+  if (generateFn) {
+    return {
+      available: true,
+      generate: async (prompt: string, opts: { temperature?: number; json?: boolean } = {}) => {
+        const out = await generateFn({ prompt, temperature: opts.temperature ?? 0.3, maxTokens: 1000 });
         return typeof out === 'string' ? out : (out.text ?? '');
-      }
-      throw new Error('ctx.llm is not available on this DSH install — compose with an LLM plugin');
+      },
+    };
+  }
+  // Graceful degradation: no LLM plugin is mounted. Return a parseable
+  // fallback that mirrors the input so the parser's section-marker fallback
+  // in analysis.ts / evolution.ts extracts heuristic metadata from the raw
+  // content. The note still persists — just without LLM-enriched keywords /
+  // context / evolution. Log once so the user knows.
+  log.warn('ctx.llm not available — using fallback analysis (keywords / context will be extracted from raw content)');
+  return {
+    available: false,
+    generate: async (_prompt: string, _opts: { temperature?: number; json?: boolean } = {}) => {
+      // analysis.ts: ANALYZE_PROMPT asks for KEYWORDS: / CONTEXT: / TAGS:.
+      // We echo back a parseable stub; parseAnalysis()'s section-marker fallback
+      // will call heuristicKeywords() / heuristicContext() on the original content.
+      return `KEYWORDS: (no LLM — using fallback)\nCONTEXT: (no LLM — using fallback)\nTAGS: (no LLM — using fallback)`;
     },
   };
 }
@@ -220,6 +234,25 @@ function renderMemorySection(notes: MemoryNote[]): string {
 }
 
 // ----- JSON Schemas for tool outputs (lossless-JSON, validated by registry) -----
+//
+// DSH's `valueSchemaSpecToJsonSchema` (the runtime path for `output.schema`)
+// walks the author-facing DSL and:
+//   1. requires `type: 'object'` + `additionalProperties: true | false` at
+//      the schema root;
+//   2. accepts per-property `required: true` (and lifts them into a top-level
+//      `required: [...]` array on the compiled schema). `required: false` is
+//      rejected (`schema.properties.<name>.required must be true when
+//      present`); mark an optional property by omitting `required`. See
+//      code-mode.ts in dsh-tools for the same pattern and
+//      zhu1090093659/dsh-web-ui/packages/dsh-tool-describe-image/src/
+//      index.ts for the canonical reference (per-property `required: true`
+//      on `text`, `model`, `image`, etc.).
+//
+// `parameterSchemaSpecToJsonSchema` (the runtime path for `parameters`)
+// enforces the same rule: `required: true` lifts to top-level `required`,
+// `required: false` is rejected, and the way to mark an optional parameter
+// is to omit the `required` field. The describe-image plugin's `prompt`
+// parameter (`{ type: 'string', description: '...' }`) is the reference.
 
 function searchOutputSchema() {
   return {
@@ -246,7 +279,7 @@ function searchOutputSchema() {
         },
       },
     },
-  };
+  } as const satisfies import('@deepseek-ai/dsh-tools').ValueSchemaSpec;
 }
 
 function simpleNoteOutputSchema() {
@@ -259,7 +292,7 @@ function simpleNoteOutputSchema() {
       keywords: { type: 'array', required: true, items: { type: 'string' } },
       tags: { type: 'array', required: true, items: { type: 'string' } },
     },
-  };
+  } as const satisfies import('@deepseek-ai/dsh-tools').ValueSchemaSpec;
 }
 
 function statsOutputSchema() {
@@ -273,7 +306,7 @@ function statsOutputSchema() {
       oldest: { type: 'integer', required: true },
       newest: { type: 'integer', required: true },
     },
-  };
+  } as const satisfies import('@deepseek-ai/dsh-tools').ValueSchemaSpec;
 }
 
 function recentOutputSchema() {
@@ -300,7 +333,7 @@ function recentOutputSchema() {
         },
       },
     },
-  };
+  } as const satisfies import('@deepseek-ai/dsh-tools').ValueSchemaSpec;
 }
 
 function formatSearchOutput(value: {
@@ -317,24 +350,20 @@ function formatSearchOutput(value: {
   ].join('\n\n');
 }
 
-export default { name, version, inject, apply };
-
 // ----- Tool factory functions -----
-//
-// Each `make*Tool` returns a DSH `ToolDefinition`-shaped object. DSH
-// validates `output.schema` as a lossless-JSON tree and invokes
-// `execute(args, exec)` on model call; `output.render` projects the
-// canonical value to model-facing content blocks; `presentCall` /
-// `presentResult` shape the UI card.
 
 function makeMemorySearchTool(engine: AgenticMemoryEngine, config: PluginConfig) {
-  return {
+  return defineTool({
     name: 'memory_search',
     description:
       'Search long-term memory for relevant notes. Use before answering questions about previous conversations, user preferences, or established facts. Returns ranked notes with id, context, keywords, tags, and content snippets.',
     parameters: {
       query: { type: 'string', required: true, description: 'The query — natural language or keywords.' },
-      k: { type: 'integer', required: false, description: 'How many notes to return (default 10).' },
+      // `k` is optional (defaults to `config.retrievalK`); omit
+      // `required` to mark the field optional — the parameter DSL
+      // rejects `required: false` (`parameters.k.required must be true
+      // when present`); see describe-image's `prompt` field.
+      k: { type: 'integer', description: 'How many notes to return (default 10).' },
     },
     output: { schema: searchOutputSchema(), render: (_args: unknown, value: unknown) => [{ type: 'text', text: formatSearchOutput(value as Parameters<typeof formatSearchOutput>[0]) }] },
     execute: async (args: { query: string; k?: number }) => {
@@ -354,11 +383,11 @@ function makeMemorySearchTool(engine: AgenticMemoryEngine, config: PluginConfig)
       };
     },
     presentCall: (args: { query: string }) => ({ card: 'generic', title: `Memory search: ${args.query}`, kind: 'other', rawInput: args }),
-  };
+  });
 }
 
 function makeMemoryAddTool(engine: AgenticMemoryEngine) {
-  return {
+  return defineTool({
     name: 'memory_add',
     description:
       'Manually add a note to long-term memory. The plugin normally auto-captures user messages — only call this when the model must remember something the user did not literally say (a derived preference, an inferred fact, etc.).',
@@ -377,11 +406,11 @@ function makeMemoryAddTool(engine: AgenticMemoryEngine) {
       return { id: note.id, keywords: note.keywords, tags: note.tags, context: note.context };
     },
     presentCall: (args: { content: string }) => ({ card: 'generic', title: `Remember: ${args.content.slice(0, 40)}`, kind: 'other', rawInput: args }),
-  };
+  });
 }
 
 function makeMemoryStatsTool(engine: AgenticMemoryEngine) {
-  return {
+  return defineTool({
     name: 'memory_stats',
     description: 'Show memory statistics: total notes, average links, oldest and newest timestamps.',
     parameters: {},
@@ -394,15 +423,16 @@ function makeMemoryStatsTool(engine: AgenticMemoryEngine) {
     },
     execute: async () => engine.stats(),
     presentCall: () => ({ card: 'generic', title: 'Memory stats', kind: 'other', rawInput: {} }),
-  };
+  });
 }
 
 function makeMemoryRecentTool(engine: AgenticMemoryEngine) {
-  return {
+  return defineTool({
     name: 'memory_recent',
     description: 'List the most recently added memory notes, newest first. Useful for "what have we talked about lately".',
     parameters: {
-      limit: { type: 'integer', required: false, description: 'How many to return (default 20).' },
+      // `limit` is optional (defaults to 20); see `memory_search.k`.
+      limit: { type: 'integer', description: 'How many to return (default 20).' },
     },
     output: {
       schema: recentOutputSchema(),
@@ -431,5 +461,7 @@ function makeMemoryRecentTool(engine: AgenticMemoryEngine) {
       };
     },
     presentCall: (args: unknown) => ({ card: 'generic', title: 'Recent memories', kind: 'other', rawInput: args }),
-  };
+  });
 }
+
+export default { name, version, inject, apply };

@@ -8,7 +8,7 @@ A-MEM engine so DeepSeek Harness can consume it via the official
 ## Why an MCP wrapper?
 
 DeepSeek Harness is plugin-based and its official integration surface for
-*external* memory systems is MCP. The native `@yourname/dsh-memory-amem`
+*external* memory systems is MCP. The native `@zhang-zhengyuan/dsh-memory-amem`
 plugin (this repo's `src/`) is the upstream TypeScript implementation;
 this `mcp/` directory packages it as an MCP server so any DSH install —
 including the headless CLI and the web UI — can use it without dragging
@@ -38,12 +38,23 @@ native plugin: `memory_search`, `memory_add`, `memory_recent`,
 
 ## Wiring into DSH
 
-Copy `cordis-mcp.cordis.yml` into your DSH config or run:
+The MCP client integration is documented in
+[`deepseek-harness/examples/mcp-memory/`](https://github.com/deepseek-ai/deepseek-harness/tree/main/examples/mcp-memory)
+— the canonical recipe loads `@deepseek-ai/dsh-mcp-client` and points it
+at this server. The MCP client handles discovery, lifecycle, and tool
+registration — this server only needs to expose the four `memory_*`
+tools over JSON-RPC.
+
+For local testing:
 
 ```sh
-dsh web --patch "$PWD/dsh-memory-amem/cordis-mcp.cordis.yml"
+dsh web --patch "$PWD/dsh-memory-amem/mcp/example.cordis.yml"
+# (or your own cordis patch that adds @deepseek-ai/dsh-mcp-client
+#  pointing at this server's stdio entry)
 ```
 
-The patch loads `@deepseek-ai/dsh-mcp-client` and points it at this server.
-The MCP client handles discovery, lifecycle, and tool registration —
-this server only needs to expose the four `memory_*` tools over JSON-RPC.
+If you want a fully self-contained DSH installation, prefer the native
+plugin (`src/`) — it's loaded as a bundle layer inside the DSH loader,
+no separate MCP server / patch overlay required. Reach for the MCP
+wrapper only when you need to integrate with a host tool runtime that
+MCP is the only admission path.

@@ -1,0 +1,13 @@
+packages:
+  - .
+
+# pnpm 11+ reads build-approval settings from this file (NOT from
+# package.json#pnpm.onlyBuiltDependencies as in pnpm 10). Without an
+# allowBuilds map, pnpm 11's runDepsStatusCheck fails the install with
+# ERR_PNPM_IGNORED_BUILDS the moment any dep has a build script
+# (esbuild's install.js is the usual offender — it downloads the
+# darwin-arm64 native binary). Map is keyed by package name pattern,
+# value is the boolean "build it" flag (true = approve).
+allowBuilds:
+  esbuild: true
+  cpu-features: true

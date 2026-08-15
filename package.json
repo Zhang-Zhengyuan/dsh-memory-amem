@@ -1,41 +1,46 @@
 {
-  "name": "@yourname/dsh-memory-amem",
-  "version": "0.1.0",
-  "description": "A-MEM style agentic memory for DeepSeek Harness (DSH). NeurIPS 2025.",
+  "name": "@zhang-zhengyuan/dsh-tool-memory-amem",
+  "version": "0.2.0",
+  "description": "A-MEM style agentic memory for the dsh web GUI: long-term memory that captures every user message, evolves links via an LLM-driven decision step, and re-injects relevant notes into every system prompt. Model-facing tools: memory_search / memory_add / memory_recent / memory_stats. Hot-pluggable — mounted via `~/.dsh/cordis.patch.yml` + a profile node_modules symlink, no dsh source changes.",
   "type": "module",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "packageManager": "pnpm@11.7.0",
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
     },
-    "./memory": {
-      "types": "./dist/memory.d.ts",
-      "import": "./dist/memory.js"
+    "./invariant": {
+      "types": "./lib/types/invariant.d.ts",
+      "default": "./lib/invariant.js"
     },
-    "./types": {
-      "types": "./dist/types.d.ts",
-      "import": "./dist/types.js"
+    "./client": {
+      "types": "./lib/types/client/index.d.ts",
+      "default": "./lib/client.js"
     },
-    "./retriever": {
-      "types": "./dist/retriever.d.ts",
-      "import": "./dist/retriever.js"
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
     },
-    "./analysis": {
-      "types": "./dist/analysis.d.ts",
-      "import": "./dist/analysis.js"
-    },
-    "./evolution": {
-      "types": "./dist/evolution.d.ts",
-      "import": "./dist/evolution.js"
-    },
-    "./web": "./web/"
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-slots"
+      ],
+      "platform": "web"
+    }
   },
   "scripts": {
-    "build": "tsc",
-    "build:mcp": "node -e \"console.log('cd mcp && npm install && npm run build')\"",
-    "dev": "tsc --watch",
+    "build": "tsc -p tsconfig.build.json && tsdown",
+    "bundle": "tsdown",
+    "watch": "tsdown --watch",
+    "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit",
     "test": "node --import tsx --test test/*.test.ts",
     "evaluate": "python3 scripts/evaluate.py",
@@ -49,36 +54,47 @@
     "amem",
     "zettelkasten",
     "long-term-memory",
-    "cordis",
-    "mcp"
+    "cordis"
   ],
-  "author": "yourname",
+  "author": "Zhang Zhengyuan",
   "license": "MIT",
+  "dependencies": {
+    "uuid": "^11.0.0"
+  },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1"
   },
   "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-system-prompt": { "optional": true },
     "@deepseek-ai/dsh-tools": { "optional": true },
-    "@deepseek-ai/dsh-system-prompt": { "optional": true }
-  },
-  "dependencies": {
-    "@deepseek-ai/cordis": "^4.0.1",
-    "uuid": "^11.0.0"
+    "@deepseek-ai/dsh-client-ui-slots": { "optional": true }
   },
   "devDependencies": {
-    "typescript": "^5.0.0",
-    "tsx": "^4.0.0",
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-system-prompt": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-tools": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-ui-slots": "^0.1.0-rc.6",
     "@types/node": "^20.0.0",
-    "@types/uuid": "^10.0.0"
+    "@types/uuid": "^10.0.0",
+    "tsdown": "^0.22.2",
+    "tsx": "^4.0.0",
+    "typescript": "~5.7.2"
   },
-  "engines": {
-    "node": ">=18"
+  "files": [
+    "lib/**/*.js",
+    "lib/**/*.js.map",
+    "lib/**/*.d.ts",
+    "lib/**/*.d.ts.map",
+    "src",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Zhang-Zhengyuan/dsh-memory-amem.git"
   },
-  "dsh": {
-    "bundle": {
-      "patch": "./cordis.patch.yml",
-      "patchMcp": "./cordis-mcp.cordis.yml"
-    },
-    "minHarnessVersion": "0.1.0"
+  "bugs": {
+    "url": "https://github.com/Zhang-Zhengyuan/dsh-memory-amem/issues"
   }
 }

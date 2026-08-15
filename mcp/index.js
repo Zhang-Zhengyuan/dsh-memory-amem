@@ -182,7 +182,7 @@ const handlers = {
   initialize: (params) => ({
     protocolVersion: '2024-11-05',
     capabilities: { tools: {} },
-    serverInfo: { name: 'dsh-memory-amem', version: '0.1.0' },
+    serverInfo: { name: 'dsh-memory-amem', version: '0.2.0' },
   }),
   'tools/list': () => ({ tools: TOOLS }),
   'tools/call': async (params) => {

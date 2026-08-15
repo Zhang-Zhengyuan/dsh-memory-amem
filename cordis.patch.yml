@@ -1,26 +1,16 @@
-# Patch overlay for the native dsh-memory-amem plugin.
+# dsh-tool-memory-amem bundle patch: inserts the agentic memory plugin row
+# into the web profile roster. Applied as a profile bundle layer (the
+# `dsh.bundle.patch` manifest field); install with
 #
-# Usage:
-#   1. cd dsh-memory-amem && pnpm install && pnpm run build
-#   2. pnpm link --global
-#   3. (in the DSH monorepo root) pnpm link --global @yourname/dsh-memory-amem
-#   4. dsh web --patch "$PWD/dsh-memory-amem/cordis.patch.yml"
+#   dsh plugin --profile web add link:<repo>
 #
-# For the MCP-server variant instead, use `cordis-mcp.cordis.yml`.
+# One package, both halves: the node half (exports ".") runs in the host
+# process and registers the model-facing memory_* tools plus a dynamic
+# system-prompt section; the browser half (declared by `dsh.client`, served
+# from lib/client.js) currently registers only a UI slot for the future
+# memory panel — the standalone HTML panel in web/ is the immediate
+# inspection surface for this v0.2.0.
 
 - insert:
-    - id: dsh-memory-amem
-      name: '@yourname/dsh-memory-amem'
-      config:
-        storageDir: !!js >-
-          process.getBuiltinModule('node:path').join(
-            process.getBuiltinModule('node:os').homedir(),
-            '.dsh', 'memory-amem'
-          )
-        retrievalK: 10
-        hybridAlpha: 0.5
-        enableEvolution: true
-        enableAutoConsolidation: true
-        maxLinksPerNote: 5
-        embeddingModel: tfidf-lite
-        llmModel: auto
+    - id: tool-memory-amem
+      name: '@zhang-zhengyuan/dsh-tool-memory-amem'
