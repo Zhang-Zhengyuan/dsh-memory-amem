@@ -32,6 +32,7 @@ test('memory prompt labels notes as untrusted and enforces the total bound', () 
     createdAt: 1,
     updatedAt: 1,
     evolutionHistory: [],
+    trustScore: 0.5,
   };
   const rendered = renderMemorySection([note], 300, 'global');
   assert.ok(rendered.includes('untrusted historical data'));

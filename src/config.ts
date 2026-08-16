@@ -1,11 +1,66 @@
 import { CONFIG_DEFAULTS } from './invariant.js';
-import type { PluginConfig } from './types.js';
+import type { AdmissionPolicyConfig, PluginConfig } from './types.js';
 
 export type PartialPluginConfig = Partial<PluginConfig>;
 
+/** Helper: merge partial admission config into defaults and validate. */
+function resolveAdmissionConfig(input: unknown): AdmissionPolicyConfig {
+  const defaults = CONFIG_DEFAULTS.admission;
+  const base = (input && typeof input === 'object') ? input as Record<string, unknown> : {};
+  const merged: AdmissionPolicyConfig = {
+    enabled: typeof base.enabled === 'boolean' ? base.enabled : defaults.enabled,
+    minLength: typeof base.minLength === 'number' ? base.minLength : defaults.minLength,
+    maxLength: typeof base.maxLength === 'number' ? base.maxLength : defaults.maxLength,
+    sensitivePatterns: Array.isArray(base.sensitivePatterns)
+      ? base.sensitivePatterns.filter((value): value is string => typeof value === 'string')
+      : defaults.sensitivePatterns,
+    ephemeralPatterns: Array.isArray(base.ephemeralPatterns)
+      ? base.ephemeralPatterns.filter((value): value is string => typeof value === 'string')
+      : defaults.ephemeralPatterns,
+    keepPatterns: Array.isArray(base.keepPatterns)
+      ? base.keepPatterns.filter((value): value is string => typeof value === 'string')
+      : defaults.keepPatterns,
+    poisonPatterns: Array.isArray(base.poisonPatterns)
+      ? base.poisonPatterns.filter((value): value is string => typeof value === 'string')
+      : defaults.poisonPatterns,
+    semanticDedupThreshold: typeof base.semanticDedupThreshold === 'number'
+      ? base.semanticDedupThreshold
+      : defaults.semanticDedupThreshold,
+    semanticDedupMinOverlap: typeof base.semanticDedupMinOverlap === 'number'
+      ? base.semanticDedupMinOverlap
+      : defaults.semanticDedupMinOverlap,
+    enableLlmReview: typeof base.enableLlmReview === 'boolean'
+      ? base.enableLlmReview
+      : defaults.enableLlmReview,
+  };
+
+  assertInteger('admission.minLength', merged.minLength, 1, 100_000);
+  assertInteger('admission.maxLength', merged.maxLength, 1, 1_000_000);
+  if (merged.minLength >= merged.maxLength) {
+    throw new RangeError('admission.minLength must be strictly less than admission.maxLength');
+  }
+  assertNumber('admission.semanticDedupThreshold', merged.semanticDedupThreshold, 0, 1);
+  assertNumber('admission.semanticDedupMinOverlap', merged.semanticDedupMinOverlap, 0, 1);
+  for (const list of [merged.sensitivePatterns, merged.ephemeralPatterns, merged.keepPatterns, merged.poisonPatterns] as const) {
+    for (const pattern of list) {
+      try {
+        new RegExp(pattern);
+      } catch (error) {
+        throw new TypeError(`admission pattern is not a valid regex: ${pattern} (${(error as Error).message})`);
+      }
+    }
+  }
+  return merged;
+}
+
 /** Resolve defaults and reject unsafe or nonsensical loader input early. */
 export function resolveConfig(options: PartialPluginConfig = {}): PluginConfig {
-  const config = { ...CONFIG_DEFAULTS, ...options } as PluginConfig;
+  const baseConfig = { ...CONFIG_DEFAULTS, ...options } as Record<string, unknown>;
+  const config = {
+    ...CONFIG_DEFAULTS,
+    ...options,
+    admission: resolveAdmissionConfig(baseConfig.admission),
+  } as PluginConfig;
 
   if (typeof config.storageDir !== 'string' || config.storageDir.trim().length === 0) {
     throw new TypeError('storageDir must be a non-empty string');

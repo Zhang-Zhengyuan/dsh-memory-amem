@@ -20,6 +20,7 @@ const fakeNote = (id: string, text: string, keywords: string[]): MemoryNote => (
   createdAt: 0,
   updatedAt: 0,
   evolutionHistory: [],
+  trustScore: 0.5,
 });
 
 test('returns the most relevant note for a query', () => {

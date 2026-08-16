@@ -30,7 +30,7 @@ import { SERVICE_KEY } from './invariant.ts'
 import { resolveConfig } from './config.ts'
 
 export const name = 'tool-memory-amem'
-export const version = '0.2.0'
+export const version = '0.3.0'
 export const inject = ['tools', 'systemPrompt', 'sessions', 'llm', 'agents']
 
 export type AmemPluginConfig = Partial<PluginConfig>
@@ -111,6 +111,11 @@ export function apply(rawCtx: Context, options: AmemPluginConfig = {}): void {
   // 3. Listen to user messages and persist them as notes.
   //    session/event carries (session, event) where event.type discriminates
   //    message-producing turns from internal control events.
+  //
+  //    v0.3.0: every candidate flows through the admission gate inside
+  //    `engine.add`. We catch `AdmissionRejectedError` and log it at info
+  //    level — a rejected message is not a failure, it is policy doing
+  //    its job (skipped ephemeral noise, blocked secrets, etc).
   if (config.enableAutoCapture) {
     ctx.on('session/event', (session: unknown, event: unknown) => {
       const ev = event as { type?: string; data?: DshMessage }
@@ -125,8 +130,15 @@ export function apply(rawCtx: Context, options: AmemPluginConfig = {}): void {
       }
       if (messageId) rememberBoundedId(capturedMessageIds, messageId)
       const sessionId = (session as { id?: string })?.id
-      void engine.add(text, { sessionId, conversationId: sessionId })
-        .catch((err) => log.warn(`add failed: ${(err as Error).message}`))
+      void engine.add(text, { sessionId, conversationId: sessionId, source: 'auto_capture' })
+        .catch((err: unknown) => {
+          if (err && typeof err === 'object' && (err as { name?: string }).name === 'AdmissionRejectedError') {
+            const reason = (err as { decision?: { matchedRule?: string; reason?: string } }).decision;
+            log.info(`admission skipped user message (${reason?.matchedRule ?? 'unknown'}): ${reason?.reason ?? 'rejected'}`)
+            return
+          }
+          log.warn(`add failed: ${(err as Error).message}`)
+        })
     })
   }
 
@@ -137,6 +149,9 @@ export function apply(rawCtx: Context, options: AmemPluginConfig = {}): void {
     stats: () => engine.stats(),
     all: () => engine.all(),
     topKForPrompt: (query: string, k?: number) => engine.topKForPrompt(query, k),
+    // v0.3.0 — admission diagnostics for sibling plugins (e.g. UI panel).
+    dumpAdmissions: () => engine.dumpAdmissions(),
+    admissionRules: () => engine.admissionRuleSnapshot(),
   })
 }
 
@@ -549,7 +564,7 @@ function makeMemoryAddTool(engine: AgenticMemoryEngine, config: PluginConfig) {
     execute: async (args: { content: string }, exec: unknown) => {
       if (args.content.length > config.maxMemoryChars) throw new RangeError(`content exceeds ${config.maxMemoryChars} characters`);
       const sessionId = sessionIdFromExecution(exec);
-      const note = await engine.add(args.content, { sessionId, conversationId: sessionId });
+      const note = await engine.add(args.content, { sessionId, conversationId: sessionId, source: 'tool_call' });
       return { id: note.id, keywords: note.keywords, tags: note.tags, context: note.context };
     },
     presentCall: (args: { content: string }) => ({ card: 'generic', title: `Remember: ${args.content.slice(0, 40)}`, kind: 'other', rawInput: args }),

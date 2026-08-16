@@ -24,6 +24,7 @@ export const CONFIG_KEYS = [
   'flushIntervalMs',
   'embeddingModel',
   'llmModel',
+  'admission',
 ] as const
 
 export type ConfigKey = (typeof CONFIG_KEYS)[number]
@@ -44,6 +45,18 @@ export const CONFIG_DEFAULTS = {
   flushIntervalMs: 5_000,
   embeddingModel: 'tfidf-lite',
   llmModel: 'auto',
+  admission: {
+    enabled: true,
+    minLength: 8,
+    maxLength: 2_000,
+    sensitivePatterns: [],
+    ephemeralPatterns: [],
+    keepPatterns: [],
+    poisonPatterns: [],
+    semanticDedupThreshold: 0.85,
+    semanticDedupMinOverlap: 0.4,
+    enableLlmReview: false,
+  },
 } as const satisfies Record<ConfigKey, unknown>
 
 /** Tool names this plugin registers with `ctx.tools.register`. */

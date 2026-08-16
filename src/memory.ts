@@ -10,10 +10,21 @@ import { v4 as uuid } from 'uuid';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { MemoryNote, MemoryAnalysis, EvolutionDecision, EvolutionResult, RetrievalResult, PluginConfig } from './types.js';
+import type {
+  AdmissionContext,
+  AdmissionDecision,
+  AdmissionSource,
+  MemoryNote,
+  MemoryAnalysis,
+  EvolutionDecision,
+  EvolutionResult,
+  RetrievalResult,
+  PluginConfig,
+} from './types.js';
 import { AnalysisService } from './analysis.js';
 import { EvolutionService } from './evolution.js';
 import { HybridRetriever } from './retriever.js';
+import { AdmissionPolicy, AdmissionRejectedError, isAcceptingDecision, computeTrustScore } from './admission.js';
 
 export interface EngineDeps {
   llm: {
@@ -27,6 +38,8 @@ export interface EngineDeps {
 export interface MemoryScopeOptions {
   conversationId?: string;
   sessionId?: string;
+  /** v0.3.0: caller provenance. Defaults to 'service' for backward compat. */
+  source?: AdmissionSource;
 }
 
 export class AgenticMemoryEngine {
@@ -45,6 +58,10 @@ export class AgenticMemoryEngine {
   private initPromise: Promise<void> | null = null;
   private initialized = false;
   private disposed = false;
+  private admission: AdmissionPolicy;
+  private admissionHistory: Array<{ context: AdmissionContext; decision: AdmissionDecision; timestamp: number }> = [];
+  private static readonly ADMISSION_HISTORY_LIMIT = 200;
+  private turnCounter = new Map<string, number>();
 
   constructor(deps: EngineDeps) {
     this.config = deps.config;
@@ -58,6 +75,7 @@ export class AgenticMemoryEngine {
     this.retriever = new HybridRetriever({ alpha: this.config.hybridAlpha, modelName: this.config.embeddingModel });
     this.analysis = new AnalysisService(deps.llm.generate);
     this.evolution = new EvolutionService(deps.llm.generate);
+    this.admission = new AdmissionPolicy({ config: this.config.admission, console: this.log });
   }
 
   init(): Promise<void> {
@@ -92,13 +110,50 @@ export class AgenticMemoryEngine {
       throw new RangeError(`Memory exceeds maxMemoryChars (${this.config.maxMemoryChars})`);
     }
 
+    // v0.3.0 — admission gate. Runs BEFORE analysis and duplicate detection
+    // so ephemeral / sensitive / oversized candidates don't pay any LLM cost.
+    const source: AdmissionSource = opts.source ?? 'service';
+    const turnIndex = this.nextTurnIndex(opts.sessionId);
+    const admissionContext: AdmissionContext = {
+      text: cleanContent,
+      sessionId: opts.sessionId,
+      source,
+      turnIndex,
+      hasRecentAdmission: this.turnCounter.size > 0 && turnIndex > 1,
+    };
+    const decision = this.admission.decide(admissionContext);
+    this.recordAdmission(admissionContext, decision);
+    this.admission.logAccepted(decision, source);
+    if (!isAcceptingDecision(decision)) {
+      throw new AdmissionRejectedError(decision);
+    }
+
     if (this.config.enableAutoConsolidation) {
-      const duplicate = this.findExactDuplicate(cleanContent, opts.sessionId);
-      if (duplicate) {
-        duplicate.updatedAt = Date.now();
-        duplicate.evolutionHistory.push({ timestamp: duplicate.updatedAt, type: 'merged', reason: 'Exact duplicate consolidated' });
+      // Tier 1 — exact-match consolidation (free, deterministic).
+      const exactDup = this.findExactDuplicate(cleanContent, opts.sessionId);
+      if (exactDup) {
+        exactDup.updatedAt = Date.now();
+        exactDup.trustScore = Math.max(exactDup.trustScore, computeTrustScore(decision, source));
+        exactDup.evolutionHistory.push({ timestamp: exactDup.updatedAt, type: 'merged', reason: 'Exact duplicate consolidated' });
         this.markDirty();
-        return duplicate;
+        return exactDup;
+      }
+
+      // Tier 2 — semantic-near-duplicate consolidation. Uses the existing
+      // hybrid retriever (BM25 + TFIDF cosine) so the cost is zero beyond
+      // what evolution already pays for the neighbours step below.
+      const semanticDup = this.findSemanticDuplicate(cleanContent, opts.sessionId);
+      if (semanticDup) {
+        const { note: dup, score } = semanticDup;
+        dup.updatedAt = Date.now();
+        dup.trustScore = Math.max(dup.trustScore, computeTrustScore(decision, source));
+        dup.evolutionHistory.push({
+          timestamp: dup.updatedAt,
+          type: 'merged',
+          reason: `Semantic duplicate consolidated (score=${score.toFixed(2)})`,
+        });
+        this.markDirty();
+        return dup;
       }
     }
 
@@ -119,6 +174,7 @@ export class AgenticMemoryEngine {
       createdAt: now,
       updatedAt: now,
       evolutionHistory: [{ timestamp: now, type: 'created', reason: 'Initial analysis' }],
+      trustScore: computeTrustScore(decision, source),
       ...(opts.conversationId ? { conversationId: opts.conversationId } : {}),
       ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
     };
@@ -156,11 +212,61 @@ export class AgenticMemoryEngine {
     return statsFor(this.all(opts));
   }
 
+  private recordAdmission(context: AdmissionContext, decision: AdmissionDecision): void {
+    this.admissionHistory.push({ context, decision, timestamp: Date.now() });
+    if (this.admissionHistory.length > AgenticMemoryEngine.ADMISSION_HISTORY_LIMIT) {
+      this.admissionHistory.splice(0, this.admissionHistory.length - AgenticMemoryEngine.ADMISSION_HISTORY_LIMIT);
+    }
+  }
+
+  private nextTurnIndex(sessionId?: string): number {
+    const key = sessionId ?? '__global__';
+    const next = (this.turnCounter.get(key) ?? 0) + 1;
+    this.turnCounter.set(key, next);
+    return next;
+  }
+
+  /** Read-only snapshot of recent admission decisions (newest last). */
+  dumpAdmissions(): ReadonlyArray<{ context: AdmissionContext; decision: AdmissionDecision; timestamp: number }> {
+    return this.admissionHistory.slice();
+  }
+
+  /** Stable list of rules currently active in the policy. */
+  admissionRuleSnapshot(): Array<{ id: string; description: string; decision: AdmissionDecision['kind'] }> {
+    return this.admission.rules();
+  }
+
   private findExactDuplicate(content: string, sessionId?: string): MemoryNote | undefined {
     const normalized = normalizeContent(content);
     return Array.from(this.notes.values()).find((note) =>
       this.matchesScope(note, sessionId) && normalizeContent(note.content) === normalized,
     );
+  }
+
+  /**
+   * v0.3.0 — semantic near-duplicate detection. Uses the existing
+   * HybridRetriever to find the top-1 neighbor; if its score clears the
+   * configured threshold (`admission.semanticDedupThreshold`) and its
+   * content overlaps the candidate on >= `admission.semanticDedupMinOverlap`
+   * Jaccard, we return a tuple `{note, score}` so the caller can record
+   * the score in the evolution history without polluting the type.
+   */
+  private findSemanticDuplicate(content: string, sessionId?: string): { note: MemoryNote; score: number } | undefined {
+    const threshold = this.config.admission.semanticDedupThreshold;
+    const minOverlap = this.config.admission.semanticDedupMinOverlap;
+    const candidates = this.retriever.retrieveScored(content, this.notes.size);
+    for (const candidate of candidates) {
+      const note = this.retriever.noteAt(candidate.index);
+      if (!note || !this.matchesScope(note, sessionId)) continue;
+      if (candidate.score < threshold) return undefined;
+      const overlap = keywordOverlap(content, note.content);
+      if (overlap >= minOverlap) {
+        return { note, score: candidate.score };
+      }
+      // First hit below threshold — no stronger neighbour ahead either.
+      return undefined;
+    }
+    return undefined;
   }
 
   private matchesScope(note: MemoryNote, sessionId?: string): boolean {
@@ -248,6 +354,7 @@ export class AgenticMemoryEngine {
         if (candidate.content.length > this.config.maxMemoryChars) {
           throw new Error(`content exceeds maxMemoryChars (${this.config.maxMemoryChars})`);
         }
+        hydrateTrustScore(candidate);
         this.notes.set(candidate.id, candidate);
       } catch (error: unknown) {
         this.log.warn(`Skipped corrupt note ${file}: ${errorMessage(error)}`);
@@ -313,6 +420,21 @@ function normalizeContent(content: string): string {
   return content.trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
+/** Jaccard overlap on Latin tokens. Returns 0 when either side is empty. */
+function keywordOverlap(a: string, b: string): number {
+  const aTokens = new Set<string>(a.toLowerCase().match(/[a-z0-9_]+/g) ?? []);
+  const bTokens = new Set<string>(b.toLowerCase().match(/[a-z0-9_]+/g) ?? []);
+  // Drop pure-numeric tokens (IDs that often inflate overlap by accident).
+  for (const set of [aTokens, bTokens]) {
+    for (const token of [...set]) if (/^\d+$/.test(token)) set.delete(token);
+  }
+  if (aTokens.size === 0 || bTokens.size === 0) return 0;
+  let intersection = 0;
+  for (const token of aTokens) if (bTokens.has(token)) intersection += 1;
+  const union = aTokens.size + bTokens.size - intersection;
+  return union === 0 ? 0 : intersection / union;
+}
+
 function statsFor(notes: MemoryNote[]): { total: number; withLinks: number; avgLinks: number; oldest: number; newest: number } {
   const withLinks = notes.filter((note) => note.links.length > 0).length;
   const timestamps = notes.map((note) => note.createdAt);
@@ -328,16 +450,23 @@ function statsFor(notes: MemoryNote[]): { total: number; withLinks: number; avgL
 function isMemoryNote(value: unknown): value is MemoryNote {
   if (!value || typeof value !== 'object') return false;
   const note = value as Partial<MemoryNote>;
-  return typeof note.id === 'string'
-    && /^[A-Za-z0-9-]+$/.test(note.id)
-    && typeof note.content === 'string'
-    && typeof note.context === 'string'
-    && stringArray(note.keywords)
-    && stringArray(note.tags)
-    && stringArray(note.links)
-    && Number.isFinite(note.createdAt)
-    && Number.isFinite(note.updatedAt)
-    && Array.isArray(note.evolutionHistory);
+  if (typeof note.id !== 'string' || !/^[A-Za-z0-9-]+$/.test(note.id)) return false;
+  if (typeof note.content !== 'string' || typeof note.context !== 'string') return false;
+  if (!stringArray(note.keywords) || !stringArray(note.tags) || !stringArray(note.links)) return false;
+  if (!Number.isFinite(note.createdAt) || !Number.isFinite(note.updatedAt)) return false;
+  if (!Array.isArray(note.evolutionHistory)) return false;
+  // v0.3.0 — trustScore is required for new notes; default missing to 0.5
+  // when reading older stores written by v0.2.0 (no migration script yet).
+  if (note.trustScore !== undefined && (!Number.isFinite(note.trustScore) || note.trustScore < 0)) {
+    return false;
+  }
+  return true;
+}
+
+function hydrateTrustScore(note: MemoryNote): void {
+  if (typeof note.trustScore !== 'number' || !Number.isFinite(note.trustScore)) {
+    note.trustScore = 0.5;
+  }
 }
 
 function stringArray(value: unknown): value is string[] {

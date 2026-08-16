@@ -69,17 +69,21 @@ same installation via `dsh plugin --profile web add`).
             └───────────────────────────────────────────────────┘
 ```
 
-**Pipeline** (faithful to the A-MEM paper, §3):
-1. **Analyze content** — LLM extracts `keywords[]`, a one-sentence `context`,
+**Pipeline** (A-MEM §3 plus the v0.3.0 admission gate):
+1. **Admission gate** *(v0.3.0)* — deterministic, dependency-free rule-based
+   classifier. `hard_block` (sensitive tokens, oversized blobs) and
+   `soft_skip` (greetings, filler turns, stack traces) terminate the pipeline
+   immediately. `hard_keep` and `uncertain` let the candidate through.
+2. **Analyze content** — LLM extracts `keywords[]`, a one-sentence `context`,
    and broad `tags[]`. Falls back to a TF heuristic if the LLM produces nothing
    usable.
-2. **Retrieve neighbors** — BM25 (k₁=1.5, b=0.75) over the corpus of note
+3. **Retrieve neighbors** — BM25 (k₁=1.5, b=0.75) over the corpus of note
    documents, α-blended with a TF-IDF semantic score. Returns the top-k notes.
-3. **Decide evolution** — LLM picks one of
+4. **Decide evolution** — LLM picks one of
    `NO_EVOLUTION | STRENGTHEN | UPDATE_NEIGHBOR | STRENGTHEN_AND_UPDATE`.
-4. **Apply evolution** — `STRENGTHEN` adds new links and tags.
+5. **Apply evolution** — `STRENGTHEN` adds new links and tags.
    `UPDATE_NEIGHBOR` rewrites the context/tags of related notes.
-5. **Persist note** — `notes/<uuid>.json` flushed every 5 seconds; index
+6. **Persist note** — `notes/<uuid>.json` flushed every 5 seconds; index
    reloaded on next `init()`.
 
 **DSH integration** — the plugin follows the canonical DSH plugin model
@@ -475,6 +479,140 @@ resolves and validates the defaults itself. Override per-host via
 | `flushIntervalMs` | `5000` | Serialized background flush interval in milliseconds. |
 | `embeddingModel` | `tfidf-lite` | Retriever backend (only `tfidf-lite` ships in v0.2.0). |
 | `llmModel` | `auto` | First discovered model, a model id, or `provider:model`. |
+| `admission.*` | `enabled:true, minLength:8, maxLength:2000, ...` | v0.3.0 admission gate (see below). |
+
+The `admission` block is a namespace; accepted keys are listed below.
+
+| `admission.*` key | Default | Description |
+|---|---|---|
+| `enabled` | `true` | Master switch. Set to `false` to bypass the gate and store every candidate. |
+| `minLength` | `8` | Below this length (after trim) the candidate is `soft_skip`ped. |
+| `maxLength` | `2000` | Above this length (after trim) the candidate is `hard_block`ed. |
+| `sensitivePatterns` | `[]` | Extra raw regex patterns promoted to `hard_block` (e.g. `\\binternal-token-\\d+`). |
+| `ephemeralPatterns` | `[]` | Extra raw regex patterns promoted to `soft_skip` (e.g. `^\\[scratch\\]`). |
+| `keepPatterns` | `[]` | Extra raw regex patterns promoted to `hard_keep` (e.g. `\\bonly use Hono\\b`). |
+| `poisonPatterns` | `[]` | Extra raw regex patterns promoted to `hard_block` against memory-poisoning attacks. |
+| `semanticDedupThreshold` | `0.85` | Top-1 neighbour score above which a near-duplicate is consolidated. Set to `1.0` to disable. |
+| `semanticDedupMinOverlap` | `0.4` | Minimum Jaccard keyword overlap (in `[0, 1]`) the candidate must share with the top-1 neighbour. |
+| `enableLlmReview` | `false` | Reserved for v0.4.0. When `true`, the `uncertain` region is forwarded to a cheap LLM classifier. |
+
+---
+
+## Admission policy (v0.3.0)
+
+Every candidate memory note flows through a four-stage gate **before** it
+reaches analysis, evolution, or persistence. Each stage is dependency-free
+and deterministic at this version; the architecture deliberately follows
+the three-stage pattern recommended by the [Adaptive Memory Admission
+Control](https://doi.org/10.48550/arxiv.2603.04549) literature while the
+**LLM utility assessor** is kept as a reserved v0.4.0 toggle.
+
+### Stage 1 — Rule-based feature extraction (microseconds)
+
+```
+poison   → hard_block  (memory-poisoning attack fingerprints)
+sensitive→ hard_block  (secrets, PII, public IPs)
+ephemeral→ soft_skip   (greetings, filler, stack traces)
+keep     → hard_keep   (explicit decisions, paths, commit refs)
+length   → soft_skip / hard_block
+default  → uncertain   (kept; flagged for optional LLM review)
+```
+
+The poison rule set ships with fingerprints tuned to the OWASP Top 10 for
+Agentic Applications (2026) ASI06 family and the
+[MINJA](https://christian-schneider.net/blog/persistent-memory-poisoning-in-ai-agents/)
+attack methodology:
+
+- `remember X forever` / `记住这个 永远` / `务必记住 永久`
+- `always prefer X` / `总是用 X` / `永远都 写`
+- `important context for future reference` / `重要背景 供以后参考` /
+  `记住这个 以后提一下`
+- `send X to <address> whenever Y` — recipient-planting for future exfiltration
+
+Both English and Chinese variants are matched. Add custom fingerprints via
+`admission.poisonPatterns`.
+
+**Built-in sensitive rules**: `Bearer xxx` / GitHub `gh*_…` / `sk-…` /
+`AKIA…` / `-----BEGIN … PRIVATE KEY-----` / inline `password=…` / email
+address / public IPv4 literal / RFC1918 IPv4 with a `host`/`server`
+keyword / JWT-shaped triple-base64 string.
+
+**Built-in ephemeral rules**: pure greetings (`hi` / `你好` / `好的` /
+`ok` / `thanks` / …), filler turns (`稍等` / `hold on` / …), stack trace
+fragments (lines containing `at … (.ts:42:7)`).
+
+**Built-in keep rules**: explicit decision markers (`we've decided`,
+`let's use`, `决定用`, `我们决定`, …), commit SHAs and `a..b` ranges,
+repo-relative file paths (e.g. `src/api/users.ts`), preference markers
+(`I always …`, `我偏好 …`), and verified-fix markers (`fixed by …`,
+`用 X 修复了`).
+
+**Precedence**: `poison > sensitive > ephemeral > keep > length > uncertain`.
+A sensitive match always wins; a stack trace is rejected even though it
+contains file paths; a hard_keep decision is not blocked by `minLength`.
+
+### Stage 1.5 — Semantic near-duplicate consolidation
+
+After the rule filter, the engine reuses the existing `HybridRetriever`
+(BM25 + TF-IDF cosine) to find the top-1 neighbour of the candidate.
+If its score clears `admission.semanticDedupThreshold` *and* the candidate
+shares at least `admission.semanticDedupMinOverlap` Jaccard keywords
+with the neighbour, the engine consolidates the candidate into the
+neighbour (writes a `merged` entry into its `evolutionHistory`) instead of
+storing a fresh note. This mirrors the dedup pass used by
+[LongMemEval](https://github.com/xiaowu0162/LongMemEval)'s pruning step
+and costs no extra LLM calls — the retrieval already happens for the
+evolution step.
+
+Set `semanticDedupThreshold: 1.0` to fall back to exact-match-only
+consolidation. Semantic dedup respects `memoryScope`; notes from
+different sessions are never merged together.
+
+### Stage 2 — Trust score on every note
+
+Every newly admitted note carries `trustScore: number` in `[0, 1]`,
+populated by `computeTrustScore(decision, source)`:
+
+|                       | `hard_keep` | `uncertain` |
+| --------------------- | ----------- | ----------- |
+| `tool_call` / `service` | **0.9**     | 0.6         |
+| `auto_capture`          | 0.7         | **0.5**     |
+
+The score is a continuous signal, not a gate. v0.3.0 ships
+`applyTrustRerank()` from `src/admission.ts`:
+
+```ts
+const reranked = applyTrustRerank(engine.search(query, 10));
+// score *= pow(note.trustScore, 2)  — trust 0.5 keeps only 25%, 0.9 keeps 81%
+```
+
+The default search path is unchanged; wire `applyTrustRerank` into your
+own UI to demote low-trust entries without dropping them. v0.4.0 will
+flip the default once per-host evaluation shows the cut-off.
+
+Legacy notes written by v0.2.0 (without `trustScore`) are hydrated to
+`0.5` at load time — no migration script needed.
+
+### Stage 3 — Retrieval-time re-rank (v0.4.0 hook)
+
+Reserved. v0.4.0 will expose `enableTrustRerank: true` to fold
+`applyTrustRerank` into the default search path.
+
+### Observability
+
+Every decision is recorded (capped at 200) and exposed through the service
+surface:
+
+```ts
+ctx.memoryAmem.dumpAdmissions()    // recent {context, decision, timestamp}
+ctx.memoryAmem.admissionRules()    // snapshot of active rule set
+ctx.memoryAmem.stats()             // trust score distribution available via dsh-web-ui v0.4.0
+```
+
+A rejected auto-capture is logged at `info` level (not `warn`) — a blocked
+candidate is the policy doing its job, not a failure. Oversized user
+messages above `maxMemoryChars` are still rejected by the existing loader
+sanity check and logged at `warn`.
 
 ---
 

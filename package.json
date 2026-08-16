@@ -1,7 +1,7 @@
 {
   "name": "@zhang-zhengyuan/dsh-tool-memory-amem",
-  "version": "0.2.0",
-  "description": "A-MEM style long-term memory for DeepSeek Harness with guarded auto-capture, hybrid retrieval, prompt recall, and four model-facing memory tools.",
+  "version": "0.3.0",
+  "description": "A-MEM style long-term memory for DeepSeek Harness with guarded auto-capture, hybrid retrieval, prompt recall, four model-facing memory tools, and a four-stage admission gate (rule filter + semantic dedup + trust score + retrieval-time rerank hook) tuned against the OWASP ASI06 memory-poisoning family.",
   "type": "module",
   "packageManager": "pnpm@11.7.0",
   "engines": {
